@@ -54,11 +54,26 @@ cli_help when unsure a flag exists.
   ~2-100. A candidate with cardinality 1 is a placeholder (e.g. orig.ident) —
   do NOT use it as the section key.
 - --main-cell-annotation: primary cell-type column. Prefer human-readable
-  cell_type/celltype/annotation over leiden/clusters when both exist.
+  cell_type/celltype/annotation over clustering when both exist. If only
+  clustering exists, use a mid-resolution one as primary (the plain `leiden` if
+  present) — the rest are still exposed via --cell-annotations below.
 - --section-metadata: categorical experimental variables to show as filter chips
   (condition, stage, timepoint, region, sex, genotype, treatment, model, batch)
   — the ones that vary across sections.
-- --cell-annotations: extra per-cell annotation columns (leiden, niche, subtypes).
+- --cell-annotations: expose EVERY clustering / niche / domain annotation, not a
+  curated subset — users switch between them, so a missed resolution is a missed
+  view. Sweep obs and pass them ALL:
+  * clustering at any resolution — leiden, louvain, kmeans, snn, walktrap, and
+    their resolution-suffixed variants (e.g. leiden_0_2 through leiden_4_0);
+  * spatial domains / niches at any k — CellCharter, niche, domain (e.g.
+    CellCharter_6 through CellCharter_30);
+  * region / segmentation labels — polygon labels, manual regions.
+  Include a column if its name matches one of these families OR it is categorical
+  with cardinality ~2-300 that is not an experimental variable (those go to
+  --section-metadata), not an ID (cardinality ≈ cell count, e.g. cell_id,
+  xenium_cell_id), and not a QC metric. When unsure, INCLUDE it — an extra
+  dropdown is cheaper than a missing annotation. Do not expose ID columns or
+  per-cell continuous QC numerics (counts, areas, fractions).
 - spatial coords: if obsm['spatial'] exists, nothing to do; otherwise pass
   --spatial-x / --spatial-y (x_centroid/y_centroid, x/y, center_x/center_y).
 - --features: genes the user named; otherwise leave to marker auto-embedding.

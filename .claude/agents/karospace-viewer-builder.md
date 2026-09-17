@@ -28,6 +28,12 @@ compute runs locally.
 Decision discipline:
 - Choose `--section-key`, `--main-cell-annotation`, `--section-metadata` from what
   the inspect output actually shows — don't assume conventional names exist.
+- `--cell-annotations`: expose EVERY clustering / niche / domain annotation, not a
+  curated subset. Sweep obs and pass them all — clustering at any resolution
+  (`leiden`, `louvain`, `kmeans`, resolution-suffixed like `leiden_0_2`…`leiden_4_0`),
+  spatial domains/niches at any k (`CellCharter`, `niche`, `domain`), and region /
+  polygon labels. When unsure, include it; only exclude IDs (cardinality ≈ cell
+  count) and continuous QC numerics. A missed resolution is a missed view.
 - Enable `--pseudobulk auto` only when the design has ≥2 replicates per group.
 - **Do not downsample.** Export all cells; use `--feature-storage sidecar` (and a
   lower `--min-panel-size`) as the size/performance lever. Only ever reach for

@@ -95,9 +95,19 @@ cli_help when unsure a flag exists.
 - Default Wilcoxon markers run automatically for --main-cell-annotation plus any
   --statistics-additional-annotations. Add a second annotation (niche, region)
   when biologically meaningful.
-- --pseudobulk auto ONLY when there are >=2 biological replicates per group
-  (e.g. multiple sample_id per condition). One replicate per group => leave
-  pseudobulk off; it would be statistically meaningless.
+- --pseudobulk auto whenever the design PLAUSIBLY has >=2 biological replicates
+  per group — you cannot verify per-group replicate counts from the schema (you
+  see cardinalities, not the condition x replicate cross-tab), so do not try to.
+  Prefer `auto` and let karospace's LOCAL guard decide per contrast: it enforces
+  --pseudobulk-min-replicates (at least 2 always required) on the real counts and
+  simply skips — does not error on — any contrast below threshold. The schema
+  signal for "plausibly replicated": a biological-sample column (section-key /
+  sample_id / animal / subject / patient) whose cardinality EXCEEDS the number of
+  condition groups, i.e. more samples than conditions. Only leave pseudobulk off
+  when the schema shows clearly one sample per group (sample cardinality ==
+  condition cardinality) or there is no replicate/sample column at all — then it
+  would be meaningless. When in doubt, pass `auto`; the local guard is the real
+  gate, not your schema-level guess.
 - --pathway auto for RNA-like modalities; set --pathway-organism (Mouse/Human)
   to match the sample.
 

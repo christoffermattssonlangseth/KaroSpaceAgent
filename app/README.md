@@ -19,7 +19,7 @@ code:
 ## Install
 
 ```bash
-cd stage2
+cd app
 pip install -e .          # pulls claude-agent-sdk
 ```
 
@@ -61,7 +61,7 @@ the export, reads errors and iterates, produces both the sidecar viewer and the
 ## Tests
 
 ```bash
-cd stage2
+cd app
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q
 ```
 

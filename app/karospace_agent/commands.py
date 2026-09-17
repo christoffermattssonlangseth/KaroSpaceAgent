@@ -22,7 +22,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-# stage2/karospace_agent/commands.py -> repo root is three parents up.
+# app/karospace_agent/commands.py -> repo root is parents[2] (karospace_agent, app, root).
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MERGE_SCRIPT = REPO_ROOT / "scripts" / "merge_sections.py"
 

@@ -75,14 +75,14 @@ locally).
 ## Install & run
 
 ```bash
-cd stage2 && pip install -e .          # pulls claude-agent-sdk
+cd app && pip install -e .             # pulls claude-agent-sdk
 export ANTHROPIC_API_KEY=sk-ant-...    # the model runs on Anthropic's servers
 karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type"
 ```
 
 The second argument (the plain-English intent) is optional; without it the agent
 picks sensible defaults from the schema. See
-[`stage2/README.md`](stage2/README.md) for layout, config, and tests.
+[`app/README.md`](app/README.md) for layout, config, and tests.
 
 ## Using it inside Claude Code
 

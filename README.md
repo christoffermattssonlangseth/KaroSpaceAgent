@@ -8,12 +8,21 @@ karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type
 ```
 
 It exists because getting from raw data to a good viewer means choosing ~30
-correct flags for a messy dataset — the part a GUI can't do for you. The agent
+correct flags for a messy dataset — and *knowing which choices are right* takes
+some spatial-transcriptomics expertise. The agent supplies that judgement: it
 inspects the data's metadata, reasons about the right parameters (which column is
 the section key, which is the main annotation, whether pseudobulk makes sense for
 the experimental design, …), optionally enriches the file with
 [KaroSpaceCompanion](../KaroSpaceCompanion), runs the export, reads errors and
 iterates, and validates the result.
+
+This is complementary to
+[KaroSpaceBuilder](https://github.com/christoffermattssonlangseth/KaroSpaceBuilder),
+the desktop GUI for the same export: the Builder puts every knob in front of you
+as a clickable form, while the Agent decides the settings for you from the data
+and a plain-English intent. Two ways in for two kinds of user — and a natural fit
+to combine, with the Agent pre-filling a Builder-style form you can then review
+and tweak before exporting.
 
 The app is built on the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)
 (Python) and is hostable as a service. Its architecture is **local hands, Claude

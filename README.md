@@ -12,6 +12,32 @@ the experimental design, …), optionally enriches the file with
 [KaroSpaceCompanion](../KaroSpaceCompanion), runs the export, and validates the
 result.
 
+## Data safety (non-negotiable)
+
+These are **sensitive human spatial datasets** (GDPR / Karolinska). Safety is the
+first design constraint, not an afterthought: the agent is built so that raw data
+*cannot* reach an LLM server, and the guarantee is enforced mechanically rather
+than left to the model's goodwill.
+
+**What the reasoning step is allowed to see — the schema, and only the schema:**
+obs column *names*, dtypes, cardinalities (distinct-value counts),
+missing/aggregate counts, CLI `--help`, and error text.
+
+**What must never cross the boundary — any data value:** the expression matrix,
+cell coordinates, patient identifiers, sample IDs, and the per-column *example
+values* that `karospace --inspect-input` prints. The agent reasons about your
+experiment from column names, types, and cardinalities alone.
+
+**How each stage enforces it:**
+
+| | Enforcement |
+| --- | --- |
+| **Stage 1** (Claude Code) | Inspect is piped through `sed 's/ examples:.*//'` so example values are stripped in-shell *before* any output enters the model's context. The skill and subagent are instructed to only ever run it this way. |
+| **Stage 2** (Agent SDK) | Enforced in code: all built-in tools are disabled, so the model's only capabilities are seven sanitizing wrappers. It cannot read a file off disk, and `inspect_input` runs `strip_inspect_examples` before returning anything. |
+
+All heavy compute (`karospace`, `karospace-companion`, scanpy, DESeq2) runs
+**locally, where the data lives**. Only sanitized schema ever leaves the machine.
+
 ## Stage 1 — Claude Code (this repo)
 
 Prove the workflow with zero infrastructure:
@@ -42,10 +68,3 @@ karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type
 ```
 
 See [`stage2/README.md`](stage2/README.md) for layout, config, and tests.
-
-## Boundaries
-
-- Compute runs locally, where the data lives.
-- Only the schema (column names, dtypes, cardinalities, missing/aggregate counts,
-  errors) is used for reasoning — never data values: not the expression matrix,
-  coordinates, patient identifiers, sample IDs, or inspect example values.

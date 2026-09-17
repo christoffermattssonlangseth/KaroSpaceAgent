@@ -28,6 +28,10 @@ Decision discipline:
   lower `--min-panel-size`) as the size/performance lever. Only ever reach for
   `--downsample` as a last resort for a real browser-performance problem, and only
   after flagging it and getting the user's OK — never silently.
+- **Produce BOTH deliverables by default:** the sidecar viewer AND a `.karospace`
+  package. After the export succeeds, package it with
+  `karospace package-sidecar <viewer.html> --output <name>.karospace` (no recompute)
+  and validate both sets of artifacts exist.
 - If a flag or column doesn't exist, adapt from the metadata rather than forcing it.
 
 When done, report back concisely: the flags you chose and *why*, whether the

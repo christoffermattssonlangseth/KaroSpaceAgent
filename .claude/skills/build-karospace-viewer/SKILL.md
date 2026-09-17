@@ -18,6 +18,33 @@ expression matrix, coordinates, or patient identifiers. All compute runs locally
 
 ## Workflow
 
+### 0. Is this the right file? (single-section trap)
+
+Datasets often arrive as **per-section files** (`..._P1_L_...`, `..._P1_NL_...`) that
+have been stripped of sample-level metadata — the tell-tale sign is a section-key
+candidate with a single placeholder value (`orig.ident = "SeuratProject"`) and **no**
+`Sample Id` / `Condition` / `Sample Batch` columns. Such a file can only ever make a
+single-section viewer with no cross-condition statistics and no replicates.
+
+If the inspect output shows this, **stop and flag it to the user** before building.
+The useful viewer is built from the **merged** file that carries `sample_id`,
+`condition`, and `sample_batch` in obs (paired designs, e.g. Lesional vs
+Non-lesional, with the patient/subject as the pseudobulk replicate unit).
+
+If the user hands you the sibling per-section files, merge them with the repo
+helper (adds `sample_id` / `condition` / `sample_batch`, runs locally on disk):
+
+```bash
+python scripts/merge_sections.py \
+  --section P1_L:/path/Xenium_P1_L_annotated_vF.h5ad:Lesional \
+  --section P1_NL:/path/Xenium_P1_NL_annotated_vF.h5ad:Non-lesional \
+  --output /path/Xenium_P1_LNL_merged.h5ad
+```
+
+Then build from the merged file. Note a single patient's L+NL is still 1 replicate
+per condition — enough for a side-by-side viewer, **not** for condition pseudobulk
+(that needs ≥2 patients, i.e. more `--section` entries).
+
 ### 1. Inspect first — always
 
 ```bash
@@ -33,7 +60,7 @@ running the pipeline. Read it before choosing anything. Also skim
 
 | Flag | How to pick it |
 | --- | --- |
-| `--section-key` | Column identifying each section/sample. Look for `sample_id`, `sample`, `section`, `slide`, `fov`, `library`. Must be categorical, cardinality ~2–100. One value ⇒ single section. |
+| `--section-key` | Column identifying each section/sample. Look for `sample_id`, `Sample Id`, `sample`, `section`, `slide`, `fov`, `library`, `condition`. Must be categorical, cardinality ~2–100. **Do not trust placeholder values** like `orig.ident = "SeuratProject"` (the Seurat default when never set) — that is *not* a real section key. |
 | `--main-cell-annotation` | Primary cell-type column. Prefer a human-readable `cell_type`/`celltype`/`annotation` over `leiden`/`clusters` when both exist. |
 | `--section-metadata` | Categorical experimental variables to show as filter chips: `condition`, `stage`, `timepoint`, `region`, `sex`, `genotype`, `treatment`, `model`, `batch`. Pick the ones that vary across sections. |
 | `--cell-annotations` | Extra per-cell annotation columns worth having in dropdowns (`leiden`, `niche`, subtype columns). |
@@ -67,7 +94,17 @@ running the pipeline. Read it before choosing anything. Also skim
   Small payloads: `embedded` (default) is fine and gives a single shareable file.
 - **Rendering performance** without dropping cells: lower `--min-panel-size`,
   keep the neighbor-graph overlay off unless needed.
-- For one-file sharing of a sidecar viewer, export to `.karospace`.
+
+**Default deliverable: produce BOTH.** The team usually wants the sidecar viewer
+*and* the single-file `.karospace` package. So after the sidecar export succeeds,
+package it (no recompute) with:
+
+```bash
+karospace package-sidecar <viewer.html> --output <name>.karospace
+```
+
+This adds `<name>.karospace` + `<name>.loader.html` alongside the sidecar files.
+Deliver both unless the user says otherwise.
 
 ### 5. Companion pre-processing — when needed
 
@@ -94,7 +131,10 @@ values into existence — verify against `--help` and the inspect output.
 - Sidecar: `viewer.html` **and** `viewer.features.json` **and** `viewer.features/`
   all present with matching relative paths. Remind the user sidecar viewers must be
   served over HTTP (`python -m http.server`), not opened via `file://`.
-- Report exactly what was produced, the key flags chosen and *why*, and how to open it.
+- `.karospace` package: `<name>.karospace` **and** `<name>.loader.html` present.
+  Open via the hosted loader at karospace.se/open or the local `.loader.html`.
+- Report exactly what was produced (both the sidecar viewer and the `.karospace`),
+  the key flags chosen and *why*, and how to open each.
 
 ## Before you finish
 

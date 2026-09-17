@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,23 +83,76 @@ def merge_python() -> str:
     return sys.executable
 
 
+def _streaming_enabled() -> bool:
+    """Live-tee child output to this process's console unless disabled.
+
+    Set KAROSPACE_AGENT_STREAM=0 to silence (e.g. a hosted service that captures
+    progress some other way). This tee goes to the LOCAL terminal only — it never
+    touches what the model sees. The model still receives only the captured string
+    the tool layer returns (sanitized/truncated). karospace's own progress lines
+    can therefore stream freely without any data-boundary concern.
+    """
+    return os.environ.get("KAROSPACE_AGENT_STREAM", "1") != "0"
+
+
 def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
-    """Run a command, capture stdout/stderr, never raise on non-zero exit."""
+    """Run a command, capturing stdout/stderr while live-teeing them to the
+    console, and never raise on non-zero exit.
+
+    Long exports (feature sidecar, DE, pathway) print incremental progress; we
+    pump each pipe on its own thread so the user watches it in real time instead
+    of waiting for a silent blocking call to return. The captured text handed back
+    is identical to what a buffered run would have produced.
+    """
+    tee = _streaming_enabled()
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             argv,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
+            bufsize=1,  # line-buffered, so progress shows as it arrives
             cwd=str(REPO_ROOT),
         )
-        return RunResult(proc.returncode, proc.stdout, proc.stderr)
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        err = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        return RunResult(124, out, err + f"\nTimed out after {timeout}s.", timed_out=True)
     except FileNotFoundError as e:
         return RunResult(127, "", f"Executable not found: {e}")
+
+    out_chunks: list[str] = []
+    err_chunks: list[str] = []
+
+    def pump(src, sink, acc: list[str]) -> None:
+        for line in iter(src.readline, ""):
+            acc.append(line)
+            if tee:
+                try:
+                    sink.write(line)
+                    sink.flush()
+                except Exception:
+                    pass  # a closed/broken console must never break the run
+        src.close()
+
+    t_out = threading.Thread(target=pump, args=(proc.stdout, sys.stdout, out_chunks), daemon=True)
+    t_err = threading.Thread(target=pump, args=(proc.stderr, sys.stderr, err_chunks), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        t_out.join()
+        t_err.join()
+        return RunResult(
+            124,
+            "".join(out_chunks),
+            "".join(err_chunks) + f"\nTimed out after {timeout}s.",
+            timed_out=True,
+        )
+
+    t_out.join()
+    t_err.join()
+    return RunResult(proc.returncode, "".join(out_chunks), "".join(err_chunks))
 
 
 def run_karospace(args: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:

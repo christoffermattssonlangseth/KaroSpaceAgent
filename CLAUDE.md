@@ -23,13 +23,16 @@ errors → fix → confirm the viewer actually wrote.
 
 ## Data-handling rule (non-negotiable)
 
-These are sensitive human spatial datasets (GDPR / Karolinska). The reasoning
-step only ever needs **sanitized metadata**: obs column *names*, dtypes, a few
-example values, cardinalities, CLI `--help`, and error text — produced by
-`karospace <file> --inspect-input`. **Never** read or transmit the raw
-expression matrix, cell coordinates, or patient identifiers. The heavy compute
-(`karospace`, `karospace-companion`, scanpy, DESeq2) always runs locally, where
-the data lives.
+These are sensitive human spatial datasets (GDPR / Karolinska). Per the data
+management plan, the reasoning step only ever receives the **schema**: obs column
+*names*, dtypes, cardinalities (distinct-value counts), missing/aggregate counts,
+CLI `--help`, and error text. **No data values** cross the boundary — not the
+expression matrix, cell coordinates, patient identifiers, sample IDs, or the
+per-column *example values* that `karospace <file> --inspect-input` prints. Strip
+those before the metadata is read: pipe inspect through `sed 's/ examples:.*//'`
+(Stage 1), or rely on the `inspect_input` tool's built-in `strip_inspect_examples`
+(Stage 2). The heavy compute (`karospace`, `karospace-companion`, scanpy, DESeq2)
+always runs locally, where the data lives.
 
 ## Model note
 

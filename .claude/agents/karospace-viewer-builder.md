@@ -15,10 +15,13 @@ inspect → choose flags → (optional companion) → export → read errors →
 Read `../KaroSpace/README.md` and `../KaroSpaceCompanion/README.md` when you need
 the full flag surface; check `--help` before using any flag you're unsure of.
 
-**Hard rule:** work only from sanitized metadata (column names, dtypes, example
-values, cardinalities, error text via `karospace <file> --inspect-input`). Never
-read or transmit the raw expression matrix, coordinates, or patient identifiers.
-All compute runs locally.
+**Hard rule:** work only from the **schema** — column names, dtypes,
+cardinalities, missing/aggregate counts, error text. **No data values** may enter
+your context (expression matrix, coordinates, patient identifiers, sample IDs, or
+inspect example values). That is why you must run inspect through the strip step
+the skill specifies — `karospace <file> --inspect-input | sed 's/ examples:.*//'`,
+never the bare form — and reason from names, types, and cardinalities alone. All
+compute runs locally.
 
 Decision discipline:
 - Choose `--section-key`, `--main-cell-annotation`, `--section-metadata` from what

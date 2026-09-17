@@ -55,11 +55,18 @@ running the pipeline. Read it before choosing anything. Also skim
 
 ### 4. Size and storage
 
-- **Large datasets** (many cells/section, e.g. >30–50k): set `--downsample 30000`
-  to keep the viewer responsive, and consider lowering `--min-panel-size`.
+- **Do NOT downsample by default.** Export all cells — researchers need the full
+  data, and dropping cells silently distorts the spatial picture and any
+  statistics. Prefer other levers for size/performance (below). Only consider
+  `--downsample` as a last resort for genuine browser-performance problems, and
+  only after saying so explicitly and confirming with the user first — never
+  silently.
 - **Many features / large payload**: use `--feature-storage sidecar` (writes
-  `viewer.html` + `viewer.features.json` + `viewer.features/`). Small payloads:
-  `embedded` (default) is fine and gives a single shareable file.
+  `viewer.html` + `viewer.features.json` + `viewer.features/`). This is the right
+  size lever — it keeps every cell but moves feature vectors out of the HTML.
+  Small payloads: `embedded` (default) is fine and gives a single shareable file.
+- **Rendering performance** without dropping cells: lower `--min-panel-size`,
+  keep the neighbor-graph overlay off unless needed.
 - For one-file sharing of a sidecar viewer, export to `.karospace`.
 
 ### 5. Companion pre-processing — when needed

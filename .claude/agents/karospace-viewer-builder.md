@@ -24,7 +24,10 @@ Decision discipline:
 - Choose `--section-key`, `--main-cell-annotation`, `--section-metadata` from what
   the inspect output actually shows — don't assume conventional names exist.
 - Enable `--pseudobulk auto` only when the design has ≥2 replicates per group.
-- Downsample and/or use sidecar storage for large datasets.
+- **Do not downsample.** Export all cells; use `--feature-storage sidecar` (and a
+  lower `--min-panel-size`) as the size/performance lever. Only ever reach for
+  `--downsample` as a last resort for a real browser-performance problem, and only
+  after flagging it and getting the user's OK — never silently.
 - If a flag or column doesn't exist, adapt from the metadata rather than forcing it.
 
 When done, report back concisely: the flags you chose and *why*, whether the

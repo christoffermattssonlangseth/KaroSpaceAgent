@@ -14,10 +14,12 @@ result.
 
 ## Data safety (non-negotiable)
 
-These are **sensitive human spatial datasets** (GDPR / Karolinska). Safety is the
-first design constraint, not an afterthought: the agent is built so that raw data
-*cannot* reach an LLM server, and the guarantee is enforced mechanically rather
-than left to the model's goodwill.
+Spatial datasets range from non-sensitive (e.g. mouse tissue) to **sensitive
+human data** under GDPR governance. **When you are working with
+sensitive data**, none of it may reach an LLM server — and rather than leave that
+to case-by-case judgement, the agent is built so the guarantee holds by default
+for *every* dataset, enforced mechanically rather than trusted to the model's
+goodwill. Non-sensitive data loses nothing by the same discipline.
 
 **What the reasoning step is allowed to see — the schema, and only the schema:**
 obs column *names*, dtypes, cardinalities (distinct-value counts),

@@ -42,7 +42,13 @@ Decision discipline:
   prior-session polygon indices (`polygon_index`) are KaroSpace's own round-tripped
   output, not independent annotations — leave them out by default; mention them so
   the user can opt in.
-- Enable `--pseudobulk auto` only when the design has ≥2 replicates per group.
+- Enable `--pseudobulk auto` whenever the design *plausibly* has ≥2 replicates per
+  group. You can't verify per-group replicate counts from the schema, so don't try
+  — prefer `auto` and let karospace's local `--pseudobulk-min-replicates` guard
+  (≥2 always required) decide per contrast on the real counts; it skips, not
+  errors, on contrasts below threshold. Schema signal: a sample column
+  (section-key / `sample_id` / `animal` / `subject`) with cardinality exceeding the
+  number of condition groups. Omit only when it's clearly one sample per group.
 - **Do not downsample.** Export all cells; use `--feature-storage sidecar` (and a
   lower `--min-panel-size`) as the size/performance lever. Only ever reach for
   `--downsample` as a last resort for a real browser-performance problem, and only

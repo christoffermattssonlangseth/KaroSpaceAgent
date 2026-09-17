@@ -1,8 +1,10 @@
-# KaroSpaceAgent — Stage 2 (Claude Agent SDK)
+# `karospace-agent` — the standalone app
 
-The Stage 1 workflow (a Claude Code skill + subagent) proven, graduated into a
-hostable Python app on the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk).
-Same architecture, now enforced in code:
+The `karospace-agent` app: a hostable Python program on the
+[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) that drives the
+`karospace` CLI with Claude. (The same playbook also ships as Claude Code config
+in the repo root — this is the standalone surface.) Architecture, enforced in
+code:
 
 - **local hands** — every side effect is a subprocess wrapper (`commands.py`);
 - **Claude brain** — the model only reasons and chooses flags (`prompt.py`);
@@ -17,7 +19,7 @@ Same architecture, now enforced in code:
 ## Install
 
 ```bash
-cd stage2
+cd app
 pip install -e .          # pulls claude-agent-sdk
 ```
 
@@ -43,7 +45,7 @@ the export, reads errors and iterates, produces both the sidecar viewer and the
 | `commands.py` | Subprocess wrappers; locates `karospace` / companion / merge script. No model contact. |
 | `sanitize.py` | The boundary: output truncation + path *stat* (never file bytes). |
 | `tools.py` | The seven `@tool` local hands, each returning sanitized text. |
-| `prompt.py` | System prompt — the Stage 1 playbook, ported to the tools. |
+| `prompt.py` | System prompt — the viewer-building playbook, ported to the tools. |
 | `agent.py` | Builds `ClaudeAgentOptions` (built-ins off) and runs the query loop. |
 | `cli.py` | `karospace-agent build <input> "<intent>"`. |
 
@@ -59,7 +61,7 @@ the export, reads errors and iterates, produces both the sidecar viewer and the
 ## Tests
 
 ```bash
-cd stage2
+cd app
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q
 ```
 

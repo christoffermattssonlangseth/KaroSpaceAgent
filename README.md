@@ -27,15 +27,25 @@ Usage inside Claude Code:
 
 or delegate the whole thing to the subagent.
 
-## Stage 2 — packaged product (later)
+## Stage 2 — packaged product (`stage2/`)
 
-Graduate to the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)
-(Python) once the workflow is proven, for something hostable alongside
-KaroSpaceBuilder. Keep the same architecture: **local hands, Claude brain,
-sanitized metadata only.**
+The proven workflow, graduated to the
+[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) (Python) as a
+hostable app alongside KaroSpaceBuilder. Same architecture, now enforced in
+code: **local hands, Claude brain, sanitized metadata only** — the agent runs
+with all built-in tools disabled, so its only capabilities are the seven
+sanitizing wrappers over the CLIs. It cannot read raw data off disk.
+
+```bash
+cd stage2 && pip install -e .
+karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type"
+```
+
+See [`stage2/README.md`](stage2/README.md) for layout, config, and tests.
 
 ## Boundaries
 
 - Compute runs locally, where the data lives.
-- Only sanitized metadata (column names, dtypes, example values, errors) is used
-  for reasoning — never the expression matrix or patient identifiers.
+- Only the schema (column names, dtypes, cardinalities, missing/aggregate counts,
+  errors) is used for reasoning — never data values: not the expression matrix,
+  coordinates, patient identifiers, sample IDs, or inspect example values.

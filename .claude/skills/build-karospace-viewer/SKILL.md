@@ -12,18 +12,23 @@ choices produce a broken or useless viewer.
 
 ## Data-handling rule
 
-Only ever look at **sanitized metadata** — column names, dtypes, example values,
-cardinalities, CLI `--help`, error text. Never read or transmit the raw
-expression matrix, coordinates, or patient identifiers. All compute runs locally.
+Per the data management plan, only the **schema** may enter your context — column
+names, dtypes, cardinalities (distinct-value counts), missing/aggregate counts,
+CLI `--help`, error text. **No data values** may cross: not the expression
+matrix, coordinates, patient identifiers, sample IDs, or the per-column *example
+values* that `--inspect-input` prints. That is why the inspect command in step 1
+is piped through a strip step — always run it that way, never the raw form.
+Reason from names, types, and cardinalities alone. All compute runs locally.
 
 ## Workflow
 
 ### 0. Is this the right file? (single-section trap)
 
 Datasets often arrive as **per-section files** (`..._P1_L_...`, `..._P1_NL_...`) that
-have been stripped of sample-level metadata — the tell-tale sign is a section-key
-candidate with a single placeholder value (`orig.ident = "SeuratProject"`) and **no**
-`Sample Id` / `Condition` / `Sample Batch` columns. Such a file can only ever make a
+have been stripped of sample-level metadata — the tell-tale sign is that the only
+section-key candidate (e.g. `orig.ident`) has **cardinality 1** (a single distinct
+value — a placeholder) and there are **no** `sample_id` / `condition` /
+`sample_batch` columns. Such a file can only ever make a
 single-section viewer with no cross-condition statistics and no replicates.
 
 If the inspect output shows this, **stop and flag it to the user** before building.
@@ -48,19 +53,23 @@ per condition — enough for a side-by-side viewer, **not** for condition pseudo
 ### 1. Inspect first — always
 
 ```bash
-karospace <input.h5ad> --inspect-input
+karospace <input.h5ad> --inspect-input | sed 's/ examples:.*//'
 ```
 
-For SpatialData `.zarr` with multiple tables, add `--spatialdata-table <name>`.
-This lists obs columns, types, example values, and missing-value counts **without**
-running the pipeline. Read it before choosing anything. Also skim
-`karospace --help` if you're unsure a flag exists — do not assume.
+The `sed` step strips the per-column example VALUES (coordinates, sample IDs,
+category labels) so only the schema enters your context — run inspect **only**
+this way, never the bare `karospace <input.h5ad> --inspect-input`. For
+SpatialData `.zarr` with multiple tables, add `--spatialdata-table <name>` before
+the pipe. What remains is obs column names, types, cardinalities, and
+missing-value counts, **without** running the pipeline. Read it before choosing
+anything. Also skim `karospace --help` if you're unsure a flag exists — do not
+assume.
 
 ### 2. Choose the core flags from the metadata
 
 | Flag | How to pick it |
 | --- | --- |
-| `--section-key` | Column identifying each section/sample. Look for `sample_id`, `Sample Id`, `sample`, `section`, `slide`, `fov`, `library`, `condition`. Must be categorical, cardinality ~2–100. **Do not trust placeholder values** like `orig.ident = "SeuratProject"` (the Seurat default when never set) — that is *not* a real section key. |
+| `--section-key` | Column identifying each section/sample. Look for `sample_id`, `Sample Id`, `sample`, `section`, `slide`, `fov`, `library`, `condition`. Must be categorical, cardinality ~2–100. **A candidate with cardinality 1 is a placeholder** (e.g. `orig.ident`, the Seurat default when never set) — that is *not* a real section key. |
 | `--main-cell-annotation` | Primary cell-type column. Prefer a human-readable `cell_type`/`celltype`/`annotation` over `leiden`/`clusters` when both exist. |
 | `--section-metadata` | Categorical experimental variables to show as filter chips: `condition`, `stage`, `timepoint`, `region`, `sex`, `genotype`, `treatment`, `model`, `batch`. Pick the ones that vary across sections. |
 | `--cell-annotations` | Extra per-cell annotation columns worth having in dropdowns (`leiden`, `niche`, subtype columns). |

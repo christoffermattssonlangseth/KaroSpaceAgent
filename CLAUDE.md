@@ -32,8 +32,9 @@ CLI `--help`, and error text. **No data values** cross the boundary — not the
 expression matrix, cell coordinates, patient identifiers, sample IDs, or the
 per-column *example values* that `karospace <file> --inspect-input` prints. Strip
 those before the metadata is read: pipe inspect through `sed 's/ examples:.*//'`
-(Stage 1), or rely on the `inspect_input` tool's built-in `strip_inspect_examples`
-(Stage 2). The heavy compute (`karospace`, `karospace-companion`, scanpy, DESeq2)
+(Claude Code surface), or rely on the `inspect_input` tool's built-in
+`strip_inspect_examples` (the `karospace-agent` app). The heavy compute
+(`karospace`, `karospace-companion`, scanpy, DESeq2)
 always runs locally, where the data lives.
 
 ## Model note

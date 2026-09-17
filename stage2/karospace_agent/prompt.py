@@ -1,5 +1,6 @@
-"""The system prompt — Stage 1's `build-karospace-viewer` playbook, ported to
-drive the sanitizing tools instead of raw shell. Decision logic is unchanged."""
+"""The system prompt — the `build-karospace-viewer` playbook (also shipped as
+Claude Code config), ported to drive the sanitizing tools instead of raw shell.
+Decision logic is unchanged."""
 
 SYSTEM_PROMPT = """\
 You build KaroSpace spatial-transcriptomics HTML viewers from a raw .h5ad or

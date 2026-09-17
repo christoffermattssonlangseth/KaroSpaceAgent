@@ -1,25 +1,35 @@
 # KaroSpaceAgent
 
-An agent that navigates the end-to-end creation of a
-[KaroSpace](../KaroSpace) spatial-transcriptomics viewer from a raw `.h5ad` /
-SpatialData `.zarr` file.
+A standalone agent that builds a [KaroSpace](../KaroSpace) spatial-transcriptomics
+viewer from a raw `.h5ad` / SpatialData `.zarr` file.
+
+```bash
+karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type"
+```
 
 It exists because getting from raw data to a good viewer means choosing ~30
 correct flags for a messy dataset — the part a GUI can't do for you. The agent
 inspects the data's metadata, reasons about the right parameters (which column is
 the section key, which is the main annotation, whether pseudobulk makes sense for
 the experimental design, …), optionally enriches the file with
-[KaroSpaceCompanion](../KaroSpaceCompanion), runs the export, and validates the
-result.
+[KaroSpaceCompanion](../KaroSpaceCompanion), runs the export, reads errors and
+iterates, and validates the result.
+
+The app is built on the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)
+(Python) and is hostable as a service. Its architecture is **local hands, Claude
+brain, sanitized schema only**.
+
+> Also drivable inside Claude Code, without installing anything — see
+> [Using it inside Claude Code](#using-it-inside-claude-code) below.
 
 ## Data safety (non-negotiable)
 
 Spatial datasets range from non-sensitive (e.g. mouse tissue) to **sensitive
-human data** under GDPR governance. **When you are working with
-sensitive data**, none of it may reach an LLM server — and rather than leave that
-to case-by-case judgement, the agent is built so the guarantee holds by default
-for *every* dataset, enforced mechanically rather than trusted to the model's
-goodwill. Non-sensitive data loses nothing by the same discipline.
+human data** under GDPR governance. **When you are working with sensitive data**,
+none of it may reach an LLM server — and rather than leave that to case-by-case
+judgement, the agent is built so the guarantee holds by default for *every*
+dataset, enforced mechanically rather than trusted to the model's goodwill.
+Non-sensitive data loses nothing by the same discipline.
 
 **What the reasoning step is allowed to see — the schema, and only the schema:**
 obs column *names*, dtypes, cardinalities (distinct-value counts),
@@ -30,43 +40,60 @@ cell coordinates, patient identifiers, sample IDs, and the per-column *example
 values* that `karospace --inspect-input` prints. The agent reasons about your
 experiment from column names, types, and cardinalities alone.
 
-**How each stage enforces it:**
+**How the boundary is enforced:** the app runs the model with all built-in tools
+disabled, so its only capabilities are seven sanitizing wrappers over the CLIs —
+it cannot read a raw file off disk, and `inspect_input` runs
+`strip_inspect_examples` before returning anything. (The Claude Code surface,
+which has no such code layer, achieves the same by piping inspect through
+`sed 's/ examples:.*//'` so example values are stripped in-shell before any
+output enters the model's context.)
 
-| | Enforcement |
-| --- | --- |
-| **Stage 1** (Claude Code) | Inspect is piped through `sed 's/ examples:.*//'` so example values are stripped in-shell *before* any output enters the model's context. The skill and subagent are instructed to only ever run it this way. |
-| **Stage 2** (Agent SDK) | Enforced in code: all built-in tools are disabled, so the model's only capabilities are seven sanitizing wrappers. It cannot read a file off disk, and `inspect_input` runs `strip_inspect_examples` before returning anything. |
+## Where things run
 
-All heavy compute (`karospace`, `karospace-companion`, scanpy, DESeq2) runs
-**locally, where the data lives**. Only sanitized schema ever leaves the machine.
+The heavy compute runs **locally, where the data lives**; only the model is
+remote. Nothing but sanitized schema crosses between them.
 
-## Stage 1 — Claude Code (this repo)
+```
+YOUR MACHINE                          ANTHROPIC SERVERS
+────────────                          ─────────────────
+raw .h5ad ──► karospace (local)
+                   │
+                   ▼
+            sanitize (schema only) ──── HTTPS ──►  Claude (the model)
+                   ▲                                   │
+                   └──────── flag choices ◄── HTTPS ───┘
+                   │
+                   ▼
+            karospace export (local) ──► viewer.html
+```
 
-Prove the workflow with zero infrastructure:
+Because Claude is hosted, *something* leaves your machine on every run — the API
+request. The whole safety design exists precisely to guarantee that request
+carries only schema (`karospace`, `karospace-companion`, scanpy, DESeq2 all run
+locally).
+
+## Install & run
+
+```bash
+cd stage2 && pip install -e .          # pulls claude-agent-sdk
+export ANTHROPIC_API_KEY=sk-ant-...    # the model runs on Anthropic's servers
+karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type"
+```
+
+The second argument (the plain-English intent) is optional; without it the agent
+picks sensible defaults from the schema. See
+[`stage2/README.md`](stage2/README.md) for layout, config, and tests.
+
+## Using it inside Claude Code
+
+The same playbook also ships as Claude Code config, so you can drive the whole
+loop from a chat with zero infrastructure:
 
 - **Skill** `build-karospace-viewer` — the parameter-selection playbook.
 - **Subagent** `karospace-viewer-builder` — runs the loop end-to-end.
-
-Usage inside Claude Code:
 
 ```
 /build-karospace-viewer  ~/data/my_xenium.h5ad "grid by sample, colour by cell_type, focus on Cd4/Cd8a/Gfap"
 ```
 
 or delegate the whole thing to the subagent.
-
-## Stage 2 — packaged product (`stage2/`)
-
-The proven workflow, graduated to the
-[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) (Python) as a
-hostable app alongside KaroSpaceBuilder. Same architecture, now enforced in
-code: **local hands, Claude brain, sanitized metadata only** — the agent runs
-with all built-in tools disabled, so its only capabilities are the seven
-sanitizing wrappers over the CLIs. It cannot read raw data off disk.
-
-```bash
-cd stage2 && pip install -e .
-karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type"
-```
-
-See [`stage2/README.md`](stage2/README.md) for layout, config, and tests.

@@ -1,15 +1,16 @@
-"""KaroSpaceAgent — Stage 2 (Claude Agent SDK).
+"""karospace-agent — the standalone KaroSpaceAgent app.
 
-Graduates the proven Stage 1 workflow (a Claude Code skill + subagent) into a
-hostable Python app built on the Claude Agent SDK. Same architecture, enforced
-in code this time:
+A hostable Python program on the Claude Agent SDK that drives the `karospace`
+CLI with Claude. (The same playbook also ships as Claude Code config in the repo
+root; this is the standalone surface.) Architecture, enforced in code:
 
-    local hands   — every side effect runs locally as a subprocess wrapper
-    Claude brain  — the model only reasons and chooses flags
-    metadata only — the only thing that ever reaches the model is sanitized
-                    metadata (column names, dtypes, example values, CLI help,
-                    error text). Never the expression matrix, coordinates, or
-                    patient identifiers.
+    local hands  — every side effect runs locally as a subprocess wrapper
+    Claude brain — the model only reasons and chooses flags
+    schema only  — the only thing that ever reaches the model is the sanitized
+                   schema (column names, dtypes, cardinalities, missing/aggregate
+                   counts, CLI help, error text). No data values: not the
+                   expression matrix, coordinates, patient identifiers, sample
+                   IDs, or inspect example values.
 
 The boundary is not a convention here: the agent runs with *all built-in tools
 disabled* (`ClaudeAgentOptions(tools=[])`), so the model's only capabilities are

@@ -1,0 +1,22 @@
+# Data — never commit raw or intermediate spatial datasets
+*.h5ad
+*.zarr/
+*.loom
+
+# Generated viewer output
+output/
+*.html
+*.karospace
+*.features.json
+*.features/
+viewer*.json
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/

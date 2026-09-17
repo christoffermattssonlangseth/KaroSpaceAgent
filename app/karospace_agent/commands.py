@@ -95,22 +95,124 @@ def _streaming_enabled() -> bool:
     return os.environ.get("KAROSPACE_AGENT_STREAM", "1") != "0"
 
 
+def _collapse_cr(text: str) -> str:
+    """Collapse carriage-return progress redraws to their final frame per line.
+
+    tqdm animates by rewriting one line with `\\r`. Live on the console that's a
+    moving bar; but in the CAPTURED copy handed to the model it would be hundreds
+    of redraw frames. For each `\\n`-delimited line, keep only what follows the
+    last `\\r` — i.e. the bar's final state — so the model sees one clean line.
+    """
+    out = []
+    for line in text.split("\n"):
+        if "\r" in line:
+            # Drop the CR the pty appends before every LF (ONLCR turns \n into
+            # \r\n), then keep only the final redraw frame after the last \r.
+            line = line.rstrip("\r").rsplit("\r", 1)[-1]
+        out.append(line)
+    return "\n".join(out)
+
+
 def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT, stream: bool = True) -> RunResult:
-    """Run a command, capturing stdout/stderr while live-teeing them to the
-    console, and never raise on non-zero exit.
+    """Run a command, capturing output while live-streaming it to the console, and
+    never raise on non-zero exit.
 
-    Long exports (feature sidecar, DE, pathway) print incremental progress; we
-    pump each pipe on its own thread so the user watches it in real time instead
-    of waiting for a silent blocking call to return. The captured text handed back
-    is identical to what a buffered run would have produced.
+    When streaming on a POSIX host we run the child under a pseudo-terminal so its
+    tqdm progress bars (karospace's "Feature sidecar", etc.) think they're
+    interactive and ANIMATE on the user's console, instead of collapsing to a wall
+    of plain log lines the way a plain pipe makes them. We still read + capture the
+    bytes for the model. Otherwise (stream off, or non-POSIX) we fall back to a
+    plain captured pipe with an optional line tee.
 
-    `stream=False` disables the live tee for THIS run. Use it for `--inspect-input`,
-    whose raw stdout carries the very example VALUES the boundary strips — teeing
-    that to the console (and scrollback/logs) would surface locally what the tool
-    then removes before the model sees it. Callers that stream stripped text can
-    print it themselves after sanitizing.
+    `stream=False` disables all teeing for THIS run. Use it for `--inspect-input`,
+    whose raw stdout carries the very example VALUES the boundary strips — showing
+    that on the console/scrollback would surface locally what the tool then removes
+    before the model sees it.
     """
     tee = _streaming_enabled() and stream
+    if tee and os.name == "posix":
+        try:
+            return _run_pty(argv, timeout)
+        except Exception:
+            pass  # any pty trouble → fall back to the portable pipe path
+    return _run_piped(argv, timeout, tee)
+
+
+def _run_pty(argv: list[str], timeout: int) -> RunResult:
+    """Run under a pty so child tqdm bars animate on the console; capture too."""
+    import errno
+    import fcntl
+    import pty
+    import select
+    import struct
+    import termios
+    import time as _time
+
+    master_fd, slave_fd = pty.openpty()
+    # Give the pty a sane width/height so tqdm's dynamic_ncols bar renders full.
+    try:
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 120, 0, 0))
+    except Exception:
+        pass
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            stdin=slave_fd,
+            cwd=str(REPO_ROOT),
+            close_fds=True,
+        )
+    except FileNotFoundError as e:
+        os.close(master_fd)
+        os.close(slave_fd)
+        return RunResult(127, "", f"Executable not found: {e}")
+    os.close(slave_fd)  # parent keeps only the master end
+
+    chunks: list[bytes] = []
+    deadline = _time.monotonic() + timeout
+    timed_out = False
+    try:
+        while True:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                proc.kill()
+                break
+            try:
+                readable, _, _ = select.select([master_fd], [], [], min(remaining, 1.0))
+            except (OSError, ValueError):
+                break
+            if not readable:
+                if proc.poll() is not None:
+                    break
+                continue
+            try:
+                data = os.read(master_fd, 65536)
+            except OSError as e:
+                if e.errno == errno.EIO:  # Linux signals child exit via EIO
+                    break
+                raise
+            if not data:  # EOF (macOS)
+                break
+            chunks.append(data)
+            try:
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+            except Exception:
+                pass  # a closed/broken console must never break the run
+    finally:
+        os.close(master_fd)
+
+    proc.wait()
+    captured = _collapse_cr(b"".join(chunks).decode("utf-8", errors="replace"))
+    if timed_out:
+        return RunResult(124, captured, f"\nTimed out after {timeout}s.", timed_out=True)
+    return RunResult(proc.returncode, captured, "")
+
+
+def _run_piped(argv: list[str], timeout: int, tee: bool) -> RunResult:
+    """Portable path: capture stdout/stderr separately, optional line tee."""
     try:
         proc = subprocess.Popen(
             argv,

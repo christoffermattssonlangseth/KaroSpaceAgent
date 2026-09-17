@@ -61,7 +61,10 @@ async def inspect_input(args: dict[str, Any]) -> dict[str, Any]:
     table = (args.get("spatialdata_table") or "").strip()
     if table:
         argv += ["--spatialdata-table", table]
-    rr = commands.run_karospace(argv, timeout=600)
+    # stream=False: do NOT live-tee this run. Its raw stdout carries the example
+    # VALUES the boundary strips — teeing would print them to the local console
+    # and scrollback before the strip below removes them from the model's view.
+    rr = commands.run_karospace(argv, timeout=600, stream=False)
     # Enforce the boundary: strip example VALUES, keep only the schema.
     rr.stdout = strip_inspect_examples(rr.stdout)
     return _report(rr, f"karospace {' '.join(argv)}")

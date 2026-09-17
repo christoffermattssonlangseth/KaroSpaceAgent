@@ -95,7 +95,7 @@ def _streaming_enabled() -> bool:
     return os.environ.get("KAROSPACE_AGENT_STREAM", "1") != "0"
 
 
-def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
+def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT, stream: bool = True) -> RunResult:
     """Run a command, capturing stdout/stderr while live-teeing them to the
     console, and never raise on non-zero exit.
 
@@ -103,8 +103,14 @@ def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
     pump each pipe on its own thread so the user watches it in real time instead
     of waiting for a silent blocking call to return. The captured text handed back
     is identical to what a buffered run would have produced.
+
+    `stream=False` disables the live tee for THIS run. Use it for `--inspect-input`,
+    whose raw stdout carries the very example VALUES the boundary strips — teeing
+    that to the console (and scrollback/logs) would surface locally what the tool
+    then removes before the model sees it. Callers that stream stripped text can
+    print it themselves after sanitizing.
     """
-    tee = _streaming_enabled()
+    tee = _streaming_enabled() and stream
     try:
         proc = subprocess.Popen(
             argv,
@@ -155,11 +161,13 @@ def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
     return RunResult(proc.returncode, "".join(out_chunks), "".join(err_chunks))
 
 
-def run_karospace(args: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
+def run_karospace(
+    args: list[str], timeout: int = DEFAULT_TIMEOUT, stream: bool = True
+) -> RunResult:
     binp = karospace_bin()
     if binp is None:
         return RunResult(127, "", "karospace not found on PATH (set KAROSPACE_BIN).")
-    return run([binp, *args], timeout=timeout)
+    return run([binp, *args], timeout=timeout, stream=stream)
 
 
 def run_companion(args: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:

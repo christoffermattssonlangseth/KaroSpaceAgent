@@ -15,7 +15,7 @@ result.
 ## Data safety (non-negotiable)
 
 Spatial datasets range from non-sensitive (e.g. mouse tissue) to **sensitive
-human data** under GDPR / Karolinska governance. **When you are working with
+human data** under GDPR governance. **When you are working with
 sensitive data**, none of it may reach an LLM server — and rather than leave that
 to case-by-case judgement, the agent is built so the guarantee holds by default
 for *every* dataset, enforced mechanically rather than trusted to the model's

@@ -24,7 +24,7 @@ errors → fix → confirm the viewer actually wrote.
 ## Data-handling rule (non-negotiable)
 
 Spatial datasets range from non-sensitive (e.g. mouse) to sensitive human data
-under GDPR / Karolinska governance. Because you can't safely tell which is which
+under GDPR governance. Because you can't safely tell which is which
 mid-task, treat the boundary as always-on: per the data management plan, the
 reasoning step only ever receives the **schema**: obs column
 *names*, dtypes, cardinalities (distinct-value counts), missing/aggregate counts,

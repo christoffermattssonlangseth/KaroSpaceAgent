@@ -8,7 +8,7 @@ the export has ~30 knobs and wrong choices produce a broken or useless viewer.
 
 # Data-handling rule (non-negotiable)
 Spatial datasets range from non-sensitive (e.g. mouse) to sensitive human data
-under GDPR / Karolinska governance, and you can't reliably tell which mid-task —
+under GDPR governance, and you can't reliably tell which mid-task —
 so the boundary is always-on. Per the data management plan, only the SCHEMA
 crosses to you — column names, dtypes,
 cardinalities (distinct-value counts), missing/aggregate counts, CLI help, error

@@ -16,7 +16,7 @@ Read `../KaroSpace/README.md` and `../KaroSpaceCompanion/README.md` when you nee
 the full flag surface; check `--help` before using any flag you're unsure of.
 
 **Hard rule:** datasets range from non-sensitive (e.g. mouse) to sensitive human
-data (GDPR / Karolinska), and you can't reliably tell which mid-task — so keep the
+data (GDPR-governed), and you can't reliably tell which mid-task — so keep the
 boundary always-on. Work only from the **schema** — column names, dtypes,
 cardinalities, missing/aggregate counts, error text. **No data values** may enter
 your context (expression matrix, coordinates, patient identifiers, sample IDs, or

@@ -13,7 +13,7 @@ choices produce a broken or useless viewer.
 ## Data-handling rule
 
 Datasets range from non-sensitive (e.g. mouse) to sensitive human data under
-GDPR / Karolinska governance; since you can't reliably tell which mid-task, treat
+GDPR governance; since you can't reliably tell which mid-task, treat
 the boundary as always-on. Per the data management plan, only the **schema** may
 enter your context — column names, dtypes, cardinalities (distinct-value counts),
 missing/aggregate counts, CLI `--help`, error text. **No data values** may cross:

@@ -1,8 +1,9 @@
 """The data-handling boundary, in code.
 
 Everything a tool is about to hand back to the model passes through here first.
-The rule (GDPR / Karolinska sensitive human spatial data): per the data
-management plan only the SCHEMA crosses to the model — column names, dtypes,
+The rule (data can be sensitive human data under GDPR / Karolinska governance, so
+the boundary is always-on regardless of the dataset): per the data management
+plan only the SCHEMA crosses to the model — column names, dtypes,
 cardinalities, missing/aggregate counts, CLI help, error text. Never any data
 VALUES: not the expression matrix, coordinates, patient identifiers, sample IDs,
 or the inspect report's example values.

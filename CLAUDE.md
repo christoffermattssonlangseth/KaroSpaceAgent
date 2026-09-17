@@ -23,8 +23,10 @@ errors → fix → confirm the viewer actually wrote.
 
 ## Data-handling rule (non-negotiable)
 
-These are sensitive human spatial datasets (GDPR / Karolinska). Per the data
-management plan, the reasoning step only ever receives the **schema**: obs column
+Spatial datasets range from non-sensitive (e.g. mouse) to sensitive human data
+under GDPR / Karolinska governance. Because you can't safely tell which is which
+mid-task, treat the boundary as always-on: per the data management plan, the
+reasoning step only ever receives the **schema**: obs column
 *names*, dtypes, cardinalities (distinct-value counts), missing/aggregate counts,
 CLI `--help`, and error text. **No data values** cross the boundary — not the
 expression matrix, cell coordinates, patient identifiers, sample IDs, or the

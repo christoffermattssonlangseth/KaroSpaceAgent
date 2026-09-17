@@ -12,9 +12,12 @@ choices produce a broken or useless viewer.
 
 ## Data-handling rule
 
-Per the data management plan, only the **schema** may enter your context — column
-names, dtypes, cardinalities (distinct-value counts), missing/aggregate counts,
-CLI `--help`, error text. **No data values** may cross: not the expression
+Datasets range from non-sensitive (e.g. mouse) to sensitive human data under
+GDPR / Karolinska governance; since you can't reliably tell which mid-task, treat
+the boundary as always-on. Per the data management plan, only the **schema** may
+enter your context — column names, dtypes, cardinalities (distinct-value counts),
+missing/aggregate counts, CLI `--help`, error text. **No data values** may cross:
+not the expression
 matrix, coordinates, patient identifiers, sample IDs, or the per-column *example
 values* that `--inspect-input` prints. That is why the inspect command in step 1
 is piped through a strip step — always run it that way, never the raw form.

@@ -54,11 +54,38 @@ cli_help when unsure a flag exists.
   ~2-100. A candidate with cardinality 1 is a placeholder (e.g. orig.ident) —
   do NOT use it as the section key.
 - --main-cell-annotation: primary cell-type column. Prefer human-readable
-  cell_type/celltype/annotation over leiden/clusters when both exist.
+  cell_type/celltype/annotation over clustering when both exist. If only
+  clustering exists, use a mid-resolution one as primary (the plain `leiden` if
+  present) — the rest are still exposed via --cell-annotations below.
 - --section-metadata: categorical experimental variables to show as filter chips
   (condition, stage, timepoint, region, sex, genotype, treatment, model, batch)
   — the ones that vary across sections.
-- --cell-annotations: extra per-cell annotation columns (leiden, niche, subtypes).
+- --cell-annotations: expose EVERY analysis-derived cell annotation, not a
+  curated subset — users switch between them, so a missed one is a missed view.
+  The PRINCIPLE (apply it, don't just match names): a cell annotation is any obs
+  column that assigns each cell to a discrete group produced by analysis —
+  clustering, cell-typing, or spatial-domain/niche detection — at any resolution
+  or k. Sweep obs and pass them ALL. The families below are ILLUSTRATIVE, not a
+  whitelist — recognise the pattern and catch methods not listed here too:
+  * clustering — leiden, louvain, kmeans, walktrap, phenograph, SNN, mclust,
+    metacell, and any `<method>_<resolution>` family (e.g. leiden_0_2 … leiden_4_0);
+  * cell-typing — cell_type, celltype, annotation, subtype, predicted.*,
+    scType/SingleR/Azimuth-style labels;
+  * spatial domains / niches — CellCharter, niche, domain, UTAG, spatialLDA,
+    Banksy, and any `<method>_<k>` family (e.g. CellCharter_6 … CellCharter_30).
+  Beyond the families, the STRUCTURAL test is the real net: include any obs column
+  that is categorical (or low-cardinality integer) with cardinality ~2-300 and is
+  NOT an experimental variable (those go to --section-metadata), NOT an ID
+  (cardinality ≈ cell count, e.g. cell_id, xenium_cell_id), and NOT a QC metric.
+  When unsure, INCLUDE it — an extra dropdown is cheaper than a missing annotation.
+  Do not expose ID columns or per-cell continuous QC numerics (counts, areas,
+  fractions).
+  EXCEPTION — the tool's own round-tripped output: columns prefixed `karospace_`
+  (e.g. karospace_polygon_labels, karospace_polygon_count) and prior-session
+  region/polygon indices (e.g. polygon_index) are KaroSpace's OWN outputs baked
+  back into the file by an earlier session, not independent annotations. Do NOT
+  sweep these in. If present, mention them so the user can explicitly opt in, but
+  leave them out by default.
 - spatial coords: if obsm['spatial'] exists, nothing to do; otherwise pass
   --spatial-x / --spatial-y (x_centroid/y_centroid, x/y, center_x/center_y).
 - --features: genes the user named; otherwise leave to marker auto-embedding.

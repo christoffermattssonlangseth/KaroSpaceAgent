@@ -28,6 +28,20 @@ compute runs locally.
 Decision discipline:
 - Choose `--section-key`, `--main-cell-annotation`, `--section-metadata` from what
   the inspect output actually shows — don't assume conventional names exist.
+- `--cell-annotations`: expose EVERY analysis-derived cell annotation, not a
+  curated subset. Principle (apply it, don't just match names): a cell annotation
+  is any obs column assigning each cell to a discrete analysis-derived group —
+  clustering, cell-typing, or spatial-domain/niche detection — at any resolution
+  or k. Names like `leiden`/`louvain`/`kmeans`/`CellCharter`/`niche`/`cell_type`/
+  `predicted.*` are illustrative, not a whitelist — catch other methods too. The
+  structural test is the net: include any categorical (or low-cardinality integer)
+  obs column, cardinality ~2–300, that isn't an experimental variable, an ID
+  (cardinality ≈ cell count), or a QC metric. When unsure, include it — a missed
+  one is a missed view.
+  Exception: columns prefixed `karospace_` (e.g. `karospace_polygon_labels`) and
+  prior-session polygon indices (`polygon_index`) are KaroSpace's own round-tripped
+  output, not independent annotations — leave them out by default; mention them so
+  the user can opt in.
 - Enable `--pseudobulk auto` only when the design has ≥2 replicates per group.
 - **Do not downsample.** Export all cells; use `--feature-storage sidecar` (and a
   lower `--min-panel-size`) as the size/performance lever. Only ever reach for

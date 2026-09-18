@@ -38,6 +38,20 @@ The agent inspects the file, chooses flags, (optionally) runs the companion, run
 the export, reads errors and iterates, produces both the sidecar viewer and the
 `.karospace` package, and validates the output — streaming progress as it goes.
 
+For a multi-turn session — the agent can ask you questions and you can iterate
+on the result — use `chat`, with or without an opening build:
+
+```bash
+karospace-agent chat ~/data/my_xenium.h5ad "grid by sample"
+karospace-agent chat
+```
+
+Type `/quit` (or Ctrl-D) to leave. `chat` uses the SDK's `ClaudeSDKClient`
+(one session, context kept across turns) with the *same* options as `build`:
+built-ins off, the seven tools, and a short conversation addendum to the system
+prompt. Anything you type goes to the model verbatim, so give paths and column
+names, not values.
+
 ## Layout
 
 | File | Role |
@@ -46,8 +60,8 @@ the export, reads errors and iterates, produces both the sidecar viewer and the
 | `sanitize.py` | The boundary: output truncation + path *stat* (never file bytes). |
 | `tools.py` | The seven `@tool` local hands, each returning sanitized text. |
 | `prompt.py` | System prompt — the viewer-building playbook, ported to the tools. |
-| `agent.py` | Builds `ClaudeAgentOptions` (built-ins off) and runs the query loop. |
-| `cli.py` | `karospace-agent build <input> "<intent>"`. |
+| `agent.py` | Builds `ClaudeAgentOptions` (built-ins off); `run()` for one-shot builds, `Session` for multi-turn chat. |
+| `cli.py` | `karospace-agent build <input> "<intent>"` and `karospace-agent chat [input] ["<intent>"]` (the REPL). |
 
 ## Config
 
@@ -66,5 +80,6 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q
 ```
 
 `test_sanitize.py` and `test_commands.py` cover the boundary and command layers —
-they run without the SDK or a live model. (The `PYTEST_DISABLE_PLUGIN_AUTOLOAD`
+they run without the SDK or a live model. `test_cli.py` covers the chat REPL
+with a scripted stdin and a fake session (needs the SDK importable, no model). (The `PYTEST_DISABLE_PLUGIN_AUTOLOAD`
 flag sidesteps an unrelated broken pytest plugin in some conda envs.)

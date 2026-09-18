@@ -93,6 +93,27 @@ The second argument (the plain-English intent) is optional; without it the agent
 picks sensible defaults from the schema. See
 [`app/README.md`](app/README.md) for layout, config, and tests.
 
+### Chat mode
+
+`build` is one shot. `chat` keeps the conversation open, so the agent can ask
+you a question (the single-section trap, whether to downsample) and act on your
+answer, and you can iterate on a built viewer without starting over:
+
+```bash
+karospace-agent chat ~/data/my_xenium.h5ad "grid by sample"   # opens with a build
+karospace-agent chat                                          # or just start talking
+```
+
+```
+you> add Cd4 and Cd8a to the preloaded features and rebuild
+you> /quit
+```
+
+Same tools, same prompt, same boundary — only the schema reaches the model
+through the tools. The one new channel is you: what you type is sent to
+Anthropic as-is, so give file paths and column *names*, never sample IDs,
+coordinates, or other values. The agent is told never to ask for them.
+
 ## Using it inside Claude Code
 
 The same playbook also ships as Claude Code config, so you can drive the whole

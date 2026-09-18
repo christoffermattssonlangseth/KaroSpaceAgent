@@ -7,15 +7,25 @@ The boundary is enforced here by two options:
                            or run Bash. Sanitized metadata is the only channel.
     setting_sources=None -> ignore the host's CLAUDE.md / settings, so the app
                            behaves identically wherever it runs.
+
+Two entry points share one option set and one renderer:
+
+    run(prompt)   -> one-shot build (`karospace-agent build`), via `query()`.
+    Session       -> multi-turn conversation (`karospace-agent chat`), via
+                     `ClaudeSDKClient`. Same tools, same prompt, same boundary;
+                     the model just keeps context between turns so it can ask
+                     the user a question and act on the answer.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ClaudeSDKClient,
     ResultMessage,
     TextBlock,
     ToolResultBlock,
@@ -24,7 +34,7 @@ from claude_agent_sdk import (
 )
 
 from .commands import REPO_ROOT
-from .prompt import SYSTEM_PROMPT
+from .prompt import CHAT_ADDENDUM, SYSTEM_PROMPT
 from .tools import ALLOWED_TOOL_NAMES, build_server
 
 # Alias, not a pinned id, so the app tracks the current Sonnet. Override with
@@ -32,9 +42,10 @@ from .tools import ALLOWED_TOOL_NAMES, build_server
 DEFAULT_MODEL = os.environ.get("KAROSPACE_AGENT_MODEL", "sonnet")
 
 
-def build_options(model: str = DEFAULT_MODEL) -> ClaudeAgentOptions:
+def build_options(model: str = DEFAULT_MODEL, chat: bool = False) -> ClaudeAgentOptions:
+    system_prompt = SYSTEM_PROMPT + CHAT_ADDENDUM if chat else SYSTEM_PROMPT
     return ClaudeAgentOptions(
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         model=model,
         mcp_servers={"karospace": build_server()},
         allowed_tools=ALLOWED_TOOL_NAMES,  # auto-allow exactly our tools
@@ -45,6 +56,26 @@ def build_options(model: str = DEFAULT_MODEL) -> ClaudeAgentOptions:
     )
 
 
+def _print(text: str) -> None:
+    print(text, flush=True)
+
+
+def _emit(message: object, out: Callable[[str], None] = _print) -> str | None:
+    """Render one SDK message to `out`. Returns the final result text when the
+    message is the turn's ResultMessage, else None."""
+    if isinstance(message, AssistantMessage):
+        for block in message.content:
+            if isinstance(block, TextBlock):
+                out(block.text)
+            elif isinstance(block, ToolUseBlock):
+                out(f"  · {block.name}({_brief(block.input)})")
+            elif isinstance(block, ToolResultBlock):
+                pass  # results are large + already sanitized; don't echo
+    elif isinstance(message, ResultMessage):
+        return getattr(message, "result", "") or ""
+    return None
+
+
 async def run(user_prompt: str, model: str = DEFAULT_MODEL) -> str:
     """Drive one build to completion, streaming progress to stdout.
 
@@ -53,18 +84,57 @@ async def run(user_prompt: str, model: str = DEFAULT_MODEL) -> str:
     final = ""
 
     async for message in query(prompt=user_prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    print(block.text, flush=True)
-                elif isinstance(block, ToolUseBlock):
-                    print(f"  · {block.name}({_brief(block.input)})", flush=True)
-                elif isinstance(block, ToolResultBlock):
-                    pass  # results are large + already sanitized; don't echo
-        elif isinstance(message, ResultMessage):
-            final = getattr(message, "result", "") or ""
+        result = _emit(message)
+        if result is not None:
+            final = result
 
     return final
+
+
+class Session:
+    """One multi-turn conversation with the agent.
+
+    Usage::
+
+        async with Session() as s:
+            await s.send("Build a viewer. Input file: /data/x.h5ad ...")
+            await s.send("Yes, merge those two sections and rebuild.")
+
+    Each `send` is one turn: the model may call tools any number of times, then
+    replies. Context (what it inspected, what it chose, what it asked) carries
+    over to the next turn. The option set is identical to the one-shot build,
+    so the data boundary is unchanged: built-in tools are off and the only
+    capabilities are the sanitizing wrappers in `tools.py`.
+    """
+
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        out: Callable[[str], None] = _print,
+    ) -> None:
+        self._client = ClaudeSDKClient(options=build_options(model, chat=True))
+        self._out = out
+
+    async def __aenter__(self) -> "Session":
+        await self._client.connect()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self._client.disconnect()
+
+    async def send(self, text: str) -> str:
+        """Send one user turn and stream the reply. Returns the final text."""
+        await self._client.query(text)
+        final = ""
+        async for message in self._client.receive_response():
+            result = _emit(message, self._out)
+            if result is not None:
+                final = result
+        return final
+
+    async def interrupt(self) -> None:
+        """Ask the model to stop the current turn."""
+        await self._client.interrupt()
 
 
 def _brief(tool_input: object, limit: int = 80) -> str:

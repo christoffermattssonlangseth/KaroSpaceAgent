@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,10 +51,18 @@ def karospace_bin() -> str | None:
 
 
 def companion_bin() -> str | None:
-    """The Rust companion binary. Env override, else the sibling-repo default."""
+    """The Rust companion binary.
+
+    Resolution order: the KAROSPACE_COMPANION override, the copy bundled inside a
+    frozen .app (so the shipped app carries the default spatial-graph
+    pre-processor), then the sibling-repo release build for dev checkouts.
+    """
     override = os.environ.get("KAROSPACE_COMPANION")
     if override:
         return override if os.path.exists(override) else None
+    bundled = _bundled_companion()
+    if bundled:
+        return bundled
     default = (
         REPO_ROOT.parent
         / "KaroSpaceCompanion"
@@ -62,6 +71,49 @@ def companion_bin() -> str | None:
         / "karospace-companion"
     )
     return str(default) if default.exists() else None
+
+
+def _bundled_companion() -> str | None:
+    """The companion copy shipped inside a PyInstaller bundle, if present.
+
+    The spec adds the binary at the root of the collected tree; depending on the
+    build layout that surfaces under sys._MEIPASS or next to the executable.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    roots: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(Path(meipass))
+    roots.append(Path(sys.executable).resolve().parent)
+    for root in roots:
+        candidate = root / "karospace-companion"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def companion_version(binary: str | None = None) -> str | None:
+    """`karospace-companion --version` (e.g. '0.1.0'), or None if unavailable.
+
+    Used by the preflight to surface which companion the app will drive, so
+    version drift against karospace is at least visible in the startup notes.
+    """
+    binary = binary or companion_bin()
+    if not binary:
+        return None
+    try:
+        out = subprocess.run(
+            [binary, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (out.stdout or out.stderr).strip()
+    # clap prints "karospace-companion 0.1.0" — keep just the version token.
+    return text.split()[-1] if text else None
 
 
 def merge_python() -> str:
@@ -83,28 +135,198 @@ def merge_python() -> str:
     return sys.executable
 
 
-def _streaming_enabled() -> bool:
-    """Live-tee child output to this process's console unless disabled.
+# --- Progress sink ---------------------------------------------------------
+#
+# A ProgressSink receives each line a child process prints, as it prints it:
+# `sink(stream, line)` with stream "stdout" | "stderr". It exists so a front end
+# (the REPL, a web UI) can show live progress from a long export. It is a LOCAL
+# side channel only: whatever the sink does, the model still receives nothing
+# but the captured, sanitized/truncated string the tool layer returns. So
+# karospace's own progress lines can flow to a console or browser freely with
+# no data-boundary concern.
 
-    Set KAROSPACE_AGENT_STREAM=0 to silence (e.g. a hosted service that captures
-    progress some other way). This tee goes to the LOCAL terminal only — it never
-    touches what the model sees. The model still receives only the captured string
-    the tool layer returns (sanitized/truncated). karospace's own progress lines
-    can therefore stream freely without any data-boundary concern.
+ProgressSink = Callable[[str, str], None]
+
+
+def _stdout_isatty() -> bool:
+    try:
+        return sys.stdout.isatty()
+    except Exception:
+        return False
+
+
+def _collapse_cr(text: str) -> str:
+    """Collapse carriage-return progress redraws to their final frame per line.
+
+    tqdm animates by rewriting one line with `\\r`. Live on the console that's a
+    moving bar; but in the CAPTURED copy handed to the model it would be hundreds
+    of redraw frames. For each `\\n`-delimited line, keep only what follows the
+    last `\\r` — i.e. the bar's final state — so the model sees one clean line.
     """
-    return os.environ.get("KAROSPACE_AGENT_STREAM", "1") != "0"
+    out = []
+    for line in text.split("\n"):
+        if "\r" in line:
+            # Drop the CR the pty appends before every LF (ONLCR turns \n into
+            # \r\n), then keep only the final redraw frame after the last \r.
+            line = line.rstrip("\r").rsplit("\r", 1)[-1]
+        out.append(line)
+    return "\n".join(out)
 
 
-def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
-    """Run a command, capturing stdout/stderr while live-teeing them to the
-    console, and never raise on non-zero exit.
+def run(
+    argv: list[str],
+    timeout: int = DEFAULT_TIMEOUT,
+    on_line: ProgressSink | None = None,
+    stream: bool = True,
+) -> RunResult:
+    """Run a command, capturing output while streaming progress locally, and never
+    raise on non-zero exit.
 
-    Long exports (feature sidecar, DE, pathway) print incremental progress; we
-    pump each pipe on its own thread so the user watches it in real time instead
-    of waiting for a silent blocking call to return. The captured text handed back
-    is identical to what a buffered run would have produced.
+    Two local delivery paths — both LOCAL side channels, so the model still gets
+    only the captured, sanitized/truncated string the tool layer returns:
+
+    * Interactive console + default sink: run the child under a pseudo-terminal so
+      its tqdm bars (karospace's "Feature sidecar") think they're interactive and
+      ANIMATE, instead of collapsing to a wall of plain log lines. Captured bytes
+      are cr-collapsed to one clean line for the model.
+    * A custom sink installed by a front end (REPL, web UI), or non-tty / stream
+      off: pump each captured line to `sink(stream, line)` on its pump thread.
+
+    `on_line` overrides the process-wide sink for this call (invoked from the pump
+    threads, not the caller's). `stream=False` silences this run entirely — used
+    for `--inspect-input`, whose raw stdout carries the example VALUES the boundary
+    strips; showing them on the console/scrollback would surface locally what the
+    tool then removes before the model sees it.
     """
-    tee = _streaming_enabled()
+    sink = null_sink if not stream else (on_line or get_progress_sink())
+    use_pty = (
+        stream
+        and on_line is None
+        and sink is console_sink
+        and os.name == "posix"
+        and _stdout_isatty()
+    )
+    if use_pty:
+        try:
+            return _run_pty(argv, timeout)
+        except Exception:
+            pass  # any pty trouble → fall back to the portable pipe path
+    return _run_piped(argv, timeout, sink)
+
+
+def _run_pty(argv: list[str], timeout: int) -> RunResult:
+    """Run under a pty so child tqdm bars animate on the console; capture too."""
+    import errno
+    import fcntl
+    import pty
+    import select
+    import struct
+    import termios
+    import time as _time
+
+    master_fd, slave_fd = pty.openpty()
+    # Give the pty a sane width/height so tqdm's dynamic_ncols bar renders full.
+    try:
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 120, 0, 0))
+    except Exception:
+        pass
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            stdin=slave_fd,
+            cwd=str(REPO_ROOT),
+            close_fds=True,
+        )
+    except FileNotFoundError as e:
+        os.close(master_fd)
+        os.close(slave_fd)
+        return RunResult(127, "", f"Executable not found: {e}")
+    os.close(slave_fd)  # parent keeps only the master end
+
+    chunks: list[bytes] = []
+    deadline = _time.monotonic() + timeout
+    timed_out = False
+    try:
+        while True:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                proc.kill()
+                break
+            try:
+                readable, _, _ = select.select([master_fd], [], [], min(remaining, 1.0))
+            except (OSError, ValueError):
+                break
+            if not readable:
+                if proc.poll() is not None:
+                    break
+                continue
+            try:
+                data = os.read(master_fd, 65536)
+            except OSError as e:
+                if e.errno == errno.EIO:  # Linux signals child exit via EIO
+                    break
+                raise
+            if not data:  # EOF (macOS)
+                break
+            chunks.append(data)
+            try:
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+            except Exception:
+                pass  # a closed/broken console must never break the run
+    finally:
+        os.close(master_fd)
+
+    proc.wait()
+    captured = _collapse_cr(b"".join(chunks).decode("utf-8", errors="replace"))
+    if timed_out:
+        return RunResult(124, captured, f"\nTimed out after {timeout}s.", timed_out=True)
+    return RunResult(proc.returncode, captured, "")
+
+
+def console_sink(stream: str, line: str) -> None:
+    """Default sink: tee to this process's own stdout/stderr."""
+    target = sys.stdout if stream == "stdout" else sys.stderr
+    try:
+        target.write(line)
+        target.flush()
+    except Exception:
+        pass  # a closed/broken console must never break the run
+
+
+def null_sink(stream: str, line: str) -> None:
+    """Silent sink (KAROSPACE_AGENT_STREAM=0, or a host that captures output
+    some other way)."""
+
+
+def _default_sink() -> ProgressSink:
+    return null_sink if os.environ.get("KAROSPACE_AGENT_STREAM", "1") == "0" else console_sink
+
+
+_progress_sink: ProgressSink | None = None
+
+
+def set_progress_sink(sink: ProgressSink | None) -> None:
+    """Install a process-wide sink for child-process progress lines.
+
+    `None` restores the default (console, or silent under
+    KAROSPACE_AGENT_STREAM=0). Process-wide because the tool handlers that
+    spawn subprocesses have no per-call hook; one front end per process is the
+    intended shape (a REPL or a web server owning one Session)."""
+    global _progress_sink
+    _progress_sink = sink
+
+
+def get_progress_sink() -> ProgressSink:
+    return _progress_sink if _progress_sink is not None else _default_sink()
+
+
+def _run_piped(argv: list[str], timeout: int, sink: ProgressSink) -> RunResult:
+    """Portable path: capture stdout/stderr separately, streaming each line to
+    `sink(stream, line)` on its pump thread."""
     try:
         proc = subprocess.Popen(
             argv,
@@ -120,19 +342,17 @@ def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
     out_chunks: list[str] = []
     err_chunks: list[str] = []
 
-    def pump(src, sink, acc: list[str]) -> None:
+    def pump(src, stream: str, acc: list[str]) -> None:
         for line in iter(src.readline, ""):
             acc.append(line)
-            if tee:
-                try:
-                    sink.write(line)
-                    sink.flush()
-                except Exception:
-                    pass  # a closed/broken console must never break the run
+            try:
+                sink(stream, line)
+            except Exception:
+                pass  # a misbehaving sink must never break the run
         src.close()
 
-    t_out = threading.Thread(target=pump, args=(proc.stdout, sys.stdout, out_chunks), daemon=True)
-    t_err = threading.Thread(target=pump, args=(proc.stderr, sys.stderr, err_chunks), daemon=True)
+    t_out = threading.Thread(target=pump, args=(proc.stdout, "stdout", out_chunks), daemon=True)
+    t_err = threading.Thread(target=pump, args=(proc.stderr, "stderr", err_chunks), daemon=True)
     t_out.start()
     t_err.start()
 
@@ -155,11 +375,13 @@ def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
     return RunResult(proc.returncode, "".join(out_chunks), "".join(err_chunks))
 
 
-def run_karospace(args: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
+def run_karospace(
+    args: list[str], timeout: int = DEFAULT_TIMEOUT, stream: bool = True
+) -> RunResult:
     binp = karospace_bin()
     if binp is None:
         return RunResult(127, "", "karospace not found on PATH (set KAROSPACE_BIN).")
-    return run([binp, *args], timeout=timeout)
+    return run([binp, *args], timeout=timeout, stream=stream)
 
 
 def run_companion(args: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:

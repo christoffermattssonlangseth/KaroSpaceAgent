@@ -12,11 +12,28 @@ dependencies = [
     "claude-agent-sdk>=0.2",
 ]
 
+[project.optional-dependencies]
+web = [
+    "starlette>=0.40",
+    "uvicorn>=0.30",
+]
+# The native desktop window (`karospace-agent app`). Includes the web extra —
+# it serves the same Starlette app — plus pywebview for the window and
+# pyinstaller for building the signed/notarized `.app` bundle.
+app = [
+    "karospace-agent[web]",
+    "pywebview>=5.0",
+    "pyinstaller>=6.0",
+]
+
 [project.scripts]
 karospace-agent = "karospace_agent.cli:main"
 
 [tool.setuptools]
 packages = ["karospace_agent"]
+
+[tool.setuptools.package-data]
+karospace_agent = ["static/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

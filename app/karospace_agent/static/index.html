@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en" class="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KaroSpace Agent</title>
+<link rel="icon" href="data:,">
+<style>
+  /* Design tokens lifted from the KaroSpace viewer (exporter.py :root).
+     Signature accent is Karolinska deep-plum #870052 with a warm-coral
+     #FF876F secondary; near-white scientific surfaces, thin borders, soft
+     cool shadows, and two faint radial gradient washes over the flat bg. */
+  :root, :root.light {
+    --background: #f5f5f5;
+    --text-color: #1a1a1a;
+    --header-bg: #ffffff;
+    --panel-bg: #ffffff;
+    --panel-card-bg: #fffafd;
+    --border-color: #e0e0e0;
+    --input-bg: #ffffff;
+    --muted-color: #666666;
+    --hover-bg: #f0f0f0;
+    --accent: #870052;
+    --accent-strong: #4f0433;
+    --accent-text: #5b063a;
+    --accent-border: #870052;
+    --accent-fill: #870052;
+    --accent-on-fill: #ffffff;
+    --accent-hover-bg: #f7e5f0;
+    --accent-warm: #FF876F;
+    --accent-soft: #FEEEEB;
+    --panel-tint-bg: #fff3fa;
+    --user-bg: #fde8f2;         /* split-b pink: the user's side */
+    --user-border: #f4a3c8;
+    --tool-bg: #f8fafc;
+    --info-bg: #eaf2ff; --info-text: #1e3a8a; --info-border: #93c5fd;
+    --warning-dot: #d6a500;
+    --danger-text: #c1121f; --danger-bg: #fff0f0; --danger-border: #f3a6a6;
+    --shadow-soft: rgba(0, 0, 0, 0.15);
+    --shadow-strong: rgba(0, 0, 0, 0.18);
+    --focus-ring: 0 0 0 2px rgba(135, 0, 82, 0.15);
+    --wash-warm: rgba(255, 135, 111, 0.08);
+    --wash-plum: rgba(135, 0, 82, 0.08);
+    --header-wash: linear-gradient(90deg, rgba(255,135,111,0.12), rgba(135,0,82,0.08));
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  :root.dark {
+    --background: #101318;
+    --text-color: #f3f6fb;
+    --header-bg: #171b22;
+    --panel-bg: #1d232c;
+    --panel-card-bg: #211a24;
+    --border-color: #3d4654;
+    --input-bg: #252c37;
+    --muted-color: #b8c2d2;
+    --hover-bg: #2a323d;
+    --accent: #f472b6;
+    --accent-strong: #be2d7d;
+    --accent-text: #ffb4dc;
+    --accent-border: #a91f70;
+    --accent-fill: #a91f70;
+    --accent-on-fill: #ffffff;
+    --accent-hover-bg: #34202c;
+    --accent-warm: #FF876F;
+    --user-bg: #34202c;
+    --user-border: #a91f70;
+    --tool-bg: #171c23;
+    --info-bg: #16233a; --info-text: #93c5fd; --info-border: #2b4a6f;
+    --danger-text: #ff8a80; --danger-bg: #3a1d1b; --danger-border: #7a2b28;
+    --shadow-soft: rgba(0, 0, 0, 0.5);
+    --shadow-strong: rgba(0, 0, 0, 0.6);
+    --focus-ring: 0 0 0 2px rgba(244, 114, 182, 0.22);
+    --wash-warm: rgba(255, 135, 111, 0.05);
+    --wash-plum: rgba(169, 31, 112, 0.10);
+    --header-wash: linear-gradient(90deg, rgba(255,135,111,0.06), rgba(169,31,112,0.12));
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    color: var(--text-color);
+    font: 16px/1.6 var(--sans);
+    background:
+      radial-gradient(800px 500px at 10% 0%, var(--wash-warm), transparent),
+      radial-gradient(900px 600px at 100% 20%, var(--wash-plum), transparent),
+      var(--background);
+    display: grid; grid-template-rows: auto 1fr auto; gap: 0;
+  }
+
+  /* --- Header ------------------------------------------------------------ */
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 18px; z-index: 90;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--header-wash), var(--header-bg);
+  }
+  .brand { display: flex; align-items: baseline; gap: 8px; }
+  .brand h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+  .brand .wordmark .k { color: var(--accent); }
+  .brand .wordmark .s { color: var(--accent-warm); }
+  .brand .kind {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.14em; color: var(--muted-color);
+    border: 1px solid var(--border-color); border-radius: 999px;
+    padding: 2px 8px; background: var(--panel-bg);
+  }
+  #status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-color); font-size: 13px; }
+  #status .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted-color); transition: background 0.2s; }
+  #status.idle .dot { background: #1f7a6f; }
+  #status.working .dot { background: var(--accent); animation: pulse 1.2s infinite; }
+  #status.interrupting .dot { background: var(--warning-dot); animation: pulse 0.5s infinite; }
+  #status.offline .dot { background: var(--danger-text); }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  header .spacer { flex: 1; }
+  #auth { color: var(--muted-color); font-size: 12px; font-family: var(--mono); }
+  #auth.bad { color: var(--danger-text); }
+  header .note {
+    color: var(--muted-color); font-size: 12.5px; line-height: 1.45;
+    max-width: 48ch; text-align: right;
+  }
+  header .note em { color: var(--accent-text); font-style: normal; font-weight: 600; }
+  .icon-btn {
+    width: 30px; height: 30px; flex: none; display: inline-flex;
+    align-items: center; justify-content: center; cursor: pointer;
+    border: 1px solid var(--border-color); border-radius: 4px;
+    background: var(--input-bg); color: var(--accent-text);
+    font-size: 15px; line-height: 1; transition: all 0.2s;
+  }
+  .icon-btn:hover { background: var(--accent-hover-bg); border-color: var(--accent-border); }
+
+  /* --- Pipeline stepper -------------------------------------------------- */
+  /* A live view of the build lifecycle, driven off the agent's tool calls:
+     each stage lights up as its tool runs, checks off when the next begins. */
+  #pipeline {
+    display: flex; align-items: center; gap: 0; overflow-x: auto;
+    padding: 9px 18px; background: var(--panel-bg);
+    border-bottom: 1px solid var(--border-color);
+  }
+  .stage { display: inline-flex; align-items: center; gap: 7px; flex: none; }
+  .stage .node {
+    width: 20px; height: 20px; flex: none; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1.5px solid var(--border-color); background: var(--input-bg);
+    color: var(--muted-color); font-size: 11px; font-weight: 700; line-height: 1;
+    transition: all 0.25s;
+  }
+  .stage .name {
+    font-size: 11.5px; font-weight: 600; color: var(--muted-color);
+    text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap;
+    transition: color 0.25s;
+  }
+  .link { width: 22px; height: 2px; background: var(--border-color); margin: 0 8px; flex: none; transition: background 0.25s; }
+  .stage.done + .link { background: var(--accent-fill); }
+  .stage.optional { opacity: 0.75; }
+
+  .stage.active .node {
+    border-color: var(--accent-border); background: var(--accent-fill);
+    color: var(--accent-on-fill); animation: stagePulse 1.2s infinite;
+  }
+  .stage.active .name { color: var(--accent-text); }
+  @keyframes stagePulse { 50% { box-shadow: 0 0 0 4px var(--accent-hover-bg); } }
+
+  .stage.done .node { border-color: var(--accent-border); background: var(--accent-fill); color: var(--accent-on-fill); }
+  .stage.done .name { color: var(--text-color); }
+  .stage.done .node::after { content: "\2713"; }        /* checkmark */
+  .stage.done .node .num { display: none; }
+
+  .stage.skipped .node { border-style: dashed; color: var(--muted-color); }
+  .stage.skipped .name { text-decoration: line-through; opacity: 0.6; }
+  .stage.skipped .node .num { display: none; }
+  .stage.skipped .node::after { content: "\2013"; }     /* en-dash */
+
+  @media (max-width: 720px) { .stage .name { display: none; } .link { margin: 0 4px; } }
+
+  /* --- Transcript ------------------------------------------------------- */
+  main { overflow: hidden; display: grid; grid-template-rows: auto 1fr auto; }
+  #transcript { overflow-y: auto; padding: 20px 18px; display: flex; flex-direction: column; gap: 12px; }
+  .msg {
+    max-width: 82ch; padding: 11px 15px; border-radius: 10px;
+    white-space: pre-wrap; word-wrap: break-word;
+    box-shadow: 0 1px 3px var(--shadow-soft);
+  }
+  .msg.user {
+    align-self: flex-end; background: var(--user-bg);
+    border: 1px solid var(--user-border);
+  }
+  .msg.assistant {
+    align-self: flex-start; background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+  }
+  .msg.tool {
+    align-self: flex-start; background: var(--tool-bg); color: var(--muted-color);
+    font: 13px/1.5 var(--mono); padding: 8px 12px; border-radius: 6px;
+    border: 1px solid var(--border-color); box-shadow: none;
+    display: flex; align-items: baseline; gap: 6px;
+  }
+  .msg.tool::before { content: "⚙"; color: var(--accent); }
+  .msg.error {
+    align-self: stretch; background: var(--danger-bg); color: var(--danger-text);
+    border: 1px solid var(--danger-border);
+    font-family: var(--mono); font-size: 13.5px;
+  }
+
+  /* Rendered markdown inside assistant bubbles. */
+  .msg.md { white-space: normal; }
+  .msg.md > *:first-child { margin-top: 0; }
+  .msg.md > *:last-child { margin-bottom: 0; }
+  .msg.md p { margin: 0.55em 0; }
+  .msg.md h1, .msg.md h2, .msg.md h3, .msg.md h4 { margin: 0.8em 0 0.35em; line-height: 1.25; font-weight: 600; }
+  .msg.md h1 { font-size: 1.3em; } .msg.md h2 { font-size: 1.15em; } .msg.md h3 { font-size: 1.05em; } .msg.md h4 { font-size: 1em; }
+  .msg.md ul, .msg.md ol { margin: 0.45em 0; padding-left: 1.5em; }
+  .msg.md li { margin: 0.2em 0; }
+  .msg.md strong { font-weight: 600; }
+  .msg.md em { font-style: italic; }
+  .msg.md a { color: var(--accent-text); text-decoration: underline; }
+  .msg.md code {
+    font-family: var(--mono); font-size: 0.88em; padding: 1px 5px;
+    background: var(--tool-bg); border: 1px solid var(--border-color); border-radius: 4px;
+  }
+  .msg.md pre {
+    background: var(--tool-bg); border: 1px solid var(--border-color); border-radius: 6px;
+    padding: 10px 12px; overflow-x: auto; margin: 0.6em 0;
+  }
+  .msg.md pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+  .msg.md blockquote {
+    margin: 0.6em 0; padding: 0.1em 0 0.1em 0.8em;
+    border-left: 3px solid var(--accent-border); color: var(--muted-color);
+  }
+  .msg.md hr { border: none; border-top: 1px solid var(--border-color); margin: 0.8em 0; }
+  .msg.md table { border-collapse: collapse; margin: 0.6em 0; font-size: 0.95em; }
+  .msg.md th, .msg.md td { border: 1px solid var(--border-color); padding: 4px 9px; text-align: left; }
+  .msg.md th { background: var(--tool-bg); font-weight: 600; }
+
+  details#progress { border-top: 1px solid var(--border-color); background: var(--panel-bg); }
+  details#progress summary {
+    cursor: pointer; padding: 8px 18px; color: var(--muted-color);
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+    user-select: none;
+  }
+  details#progress summary span { font-family: var(--mono); text-transform: none; letter-spacing: 0; }
+  #log {
+    max-height: 26vh; overflow-y: auto; margin: 0; padding: 8px 18px 12px;
+    font: 13px/1.5 var(--mono); color: var(--muted-color); white-space: pre-wrap;
+  }
+  #log .stderr { color: var(--text-color); }
+
+  /* --- Composer --------------------------------------------------------- */
+  footer { border-top: 1px solid var(--border-color); background: var(--header-wash), var(--header-bg); padding: 12px 18px; }
+  form { display: flex; gap: 8px; align-items: flex-end; max-width: 100ch; margin: 0 auto; }
+  textarea {
+    flex: 1; resize: none; min-height: 44px; max-height: 40vh; padding: 11px 13px;
+    border: 1px solid var(--border-color); border-radius: 6px;
+    background: var(--input-bg); color: var(--text-color); font: inherit;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  textarea:focus { outline: none; border-color: var(--accent-border); box-shadow: var(--focus-ring); }
+  button {
+    padding: 10px 16px; border-radius: 4px; border: 1px solid var(--border-color);
+    background: var(--input-bg); color: var(--text-color); font: inherit;
+    cursor: pointer; transition: all 0.2s;
+  }
+  button:hover:not(:disabled) { background: var(--hover-bg); }
+  button.primary {
+    background: var(--accent-fill); color: var(--accent-on-fill);
+    border-color: var(--accent-border); font-weight: 600;
+  }
+  button.primary:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  footer .hint { max-width: 100ch; margin: 8px auto 0; color: var(--muted-color); font-size: 12.5px; }
+  footer .hint kbd {
+    font-family: var(--mono); font-size: 12px;
+    border: 1px solid var(--border-color); border-radius: 4px;
+    padding: 0 4px; background: var(--input-bg);
+  }
+
+  /* Footer wordmark badge — the KaroSpace signature pill. */
+  .brand-badge {
+    position: fixed; right: 14px; bottom: 14px; z-index: 80;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.18em;
+    opacity: 0.7; color: var(--accent-text);
+    background: var(--accent-hover-bg); border: 1px solid var(--accent-border);
+    border-radius: 999px; padding: 4px 12px; pointer-events: none;
+    box-shadow: 0 2px 8px var(--shadow-soft);
+  }
+
+  @media (max-width: 720px) {
+    header .note { display: none; }
+    .brand .kind { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1><span class="wordmark"><span class="k">Karo</span><span class="s">Space</span></span> Agent</h1>
+    <span class="kind">viewer builder</span>
+  </div>
+  <span id="status" class="offline"><span class="dot"></span><span id="status-text">connecting…</span></span>
+  <span id="auth" title="Which credential the model runs under"></span>
+  <span class="spacer"></span>
+  <span class="note">Only sanitized schema reaches the model through its tools. What you type here goes to Anthropic as-is: give paths and column <em>names</em>, never sample IDs, coordinates, or values.</span>
+  <button type="button" id="theme" class="icon-btn" title="Toggle theme (T)" aria-label="Toggle theme">🌙</button>
+</header>
+<main>
+  <div id="pipeline" aria-label="Build pipeline">
+    <div class="stage" data-stage="inspect"><span class="node"><span class="num">1</span></span><span class="name">Inspect</span></div>
+    <span class="link"></span>
+    <div class="stage optional" data-stage="prep"><span class="node"><span class="num">2</span></span><span class="name">Prep</span></div>
+    <span class="link"></span>
+    <div class="stage" data-stage="export"><span class="node"><span class="num">3</span></span><span class="name">Export</span></div>
+    <span class="link"></span>
+    <div class="stage" data-stage="package"><span class="node"><span class="num">4</span></span><span class="name">Package</span></div>
+    <span class="link"></span>
+    <div class="stage" data-stage="validate"><span class="node"><span class="num">5</span></span><span class="name">Validate</span></div>
+  </div>
+  <div id="transcript"></div>
+  <details id="progress">
+    <summary>Export progress <span id="log-count">(0 lines)</span></summary>
+    <pre id="log"></pre>
+  </details>
+</main>
+<footer>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="e.g. Build a viewer from /data/my_xenium.h5ad, grid by sample, colour by cell_type" autofocus></textarea>
+    <button type="button" id="stop" disabled>Stop</button>
+    <button type="submit" id="send" class="primary">Send</button>
+  </form>
+  <div class="hint"><kbd>Enter</kbd> sends, <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line. Stop interrupts the current turn; queued messages still run.</div>
+</footer>
+<div class="brand-badge">KaroSpace</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const transcript = $("transcript"), log = $("log"), logCount = $("log-count");
+  const status = $("status"), statusText = $("status-text");
+  const input = $("input"), sendBtn = $("send"), stopBtn = $("stop");
+  let lines = 0, lastAssistant = null;
+  const MAX_LOG_LINES = 5000;
+
+  // Theme: default from stored choice, else system preference. Toggle with the
+  // header button or the `T` key, mirroring the KaroSpace viewer.
+  const root = document.documentElement;
+  function applyTheme(mode) {
+    root.classList.remove("light", "dark");
+    root.classList.add(mode);
+    $("theme").textContent = mode === "dark" ? "☀️" : "🌙";
+    try { localStorage.setItem("karospace-agent-theme", mode); } catch (_) {}
+  }
+  (function initTheme() {
+    let mode = null;
+    try { mode = localStorage.getItem("karospace-agent-theme"); } catch (_) {}
+    if (!mode) mode = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    applyTheme(mode);
+  })();
+  $("theme").addEventListener("click", () =>
+    applyTheme(root.classList.contains("dark") ? "light" : "dark"));
+
+  function scrollDown(el) { el.scrollTop = el.scrollHeight; }
+  function atBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeight < 40; }
+
+  // --- Minimal, self-contained markdown -> HTML (no external library, so the
+  // app renders offline and nothing extra crosses the boundary). Input is
+  // always HTML-escaped before any tag is emitted. Assistant replies only. ---
+  function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function mdInline(s) {  // s is already HTML-escaped
+    const codes = [];
+    s = s.replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return "\u0000" + (codes.length - 1) + "\u0000"; });
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,
+      (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+    s = s.replace(/(^|[^_\w])_([^_\n]+)_/g, "$1<em>$2</em>");
+    s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
+    return s;
+  }
+  function mdRow(line) {
+    let cells = line.trim().replace(/^\||\|$/g, "").split("|");
+    return cells.map((c) => c.trim());
+  }
+  function renderMarkdown(src) {
+    const lines = src.split("\n");
+    let html = "", i = 0, para = [];
+    const flush = () => { if (para.length) { html += "<p>" + para.map(mdInline).join("<br>") + "</p>"; para = []; } };
+    while (i < lines.length) {
+      const line = lines[i];
+      if (/^```/.test(line)) {                                   // fenced code
+        flush(); i++;
+        const buf = [];
+        while (i < lines.length && !/^```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+        i++;
+        html += "<pre><code>" + escapeHtml(buf.join("\n")) + "</code></pre>";
+        continue;
+      }
+      const h = line.match(/^(#{1,6})\s+(.*)$/);                 // heading
+      if (h) { flush(); const l = h[1].length; html += `<h${l}>` + mdInline(escapeHtml(h[2])) + `</h${l}>`; i++; continue; }
+      if (/^(---|\*\*\*|___)\s*$/.test(line)) { flush(); html += "<hr>"; i++; continue; }
+      if (/^>\s?/.test(line)) {                                   // blockquote
+        flush(); const buf = [];
+        while (i < lines.length && /^>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^>\s?/, "")); i++; }
+        html += "<blockquote>" + renderMarkdown(buf.join("\n")) + "</blockquote>";
+        continue;
+      }
+      if (line.includes("|") && i + 1 < lines.length &&          // pipe table
+          /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(lines[i + 1])) {
+        flush();
+        const head = mdRow(line); i += 2; const rows = [];
+        while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") { rows.push(mdRow(lines[i])); i++; }
+        html += "<table><thead><tr>" + head.map((c) => "<th>" + mdInline(escapeHtml(c)) + "</th>").join("") +
+          "</tr></thead><tbody>" +
+          rows.map((r) => "<tr>" + r.map((c) => "<td>" + mdInline(escapeHtml(c)) + "</td>").join("") + "</tr>").join("") +
+          "</tbody></table>";
+        continue;
+      }
+      if (/^\s*[-*+]\s+/.test(line)) {                            // unordered list
+        flush(); const items = [];
+        while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*+]\s+/, "")); i++; }
+        html += "<ul>" + items.map((it) => "<li>" + mdInline(escapeHtml(it)) + "</li>").join("") + "</ul>";
+        continue;
+      }
+      if (/^\s*\d+\.\s+/.test(line)) {                            // ordered list
+        flush(); const items = [];
+        while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+\.\s+/, "")); i++; }
+        html += "<ol>" + items.map((it) => "<li>" + mdInline(escapeHtml(it)) + "</li>").join("") + "</ol>";
+        continue;
+      }
+      if (/^\s*$/.test(line)) { flush(); i++; continue; }        // blank -> para break
+      para.push(escapeHtml(line));
+      i++;
+    }
+    flush();
+    return html;
+  }
+
+  function addMessage(kind, text, md) {
+    const stick = atBottom(transcript);
+    const div = document.createElement("div");
+    div.className = "msg " + kind;
+    if (md) { div.classList.add("md"); div._md = text; div.innerHTML = renderMarkdown(text); }
+    else { div.textContent = text; }
+    transcript.appendChild(div);
+    if (stick) scrollDown(transcript);
+    return div;
+  }
+
+  function setState(state) {
+    status.className = state;
+    statusText.textContent = ({
+      idle: "idle", working: "working…", interrupting: "stopping…", offline: "disconnected",
+    })[state] || state;
+    stopBtn.disabled = state !== "working";
+  }
+
+  function addProgress(stream, line) {
+    const stick = atBottom(log);
+    const span = document.createElement("span");
+    span.className = stream;
+    span.textContent = line + "\n";
+    log.appendChild(span);
+    lines += 1;
+    while (log.childNodes.length > MAX_LOG_LINES) log.removeChild(log.firstChild);
+    logCount.textContent = `(${lines} lines)`;
+    if (stick) scrollDown(log);
+  }
+
+  // The build lifecycle, driven off tool-call events. Each tool maps to a stage
+  // that goes active while it runs and checks off when the next stage begins;
+  // a fresh inspect_input resets the whole strip (a build always starts there).
+  const pipeline = (() => {
+    const order = ["inspect", "prep", "export", "package", "validate"];
+    const TOOL_STAGE = {
+      inspect_input: "inspect",
+      merge_sections: "prep", run_companion: "prep",
+      run_export: "export", package_sidecar: "package", validate_output: "validate",
+      // cli_help maps to nothing — it's a flag lookup, not a build stage.
+    };
+    const el = (k) => document.querySelector(`.stage[data-stage="${k}"]`);
+    function set(k, state) {
+      const node = el(k);
+      if (!node) return;
+      node.classList.remove("active", "done", "skipped");
+      if (state) node.classList.add(state);
+    }
+    function reset() { order.forEach((k) => set(k, null)); }
+    function onTool(text) {
+      const m = /^(\w+)/.exec(text || "");
+      const stage = m && TOOL_STAGE[m[1]];
+      if (!stage) return;
+      if (m[1] === "inspect_input") reset();
+      const idx = order.indexOf(stage);
+      order.forEach((k, j) => {
+        if (j >= idx) return;
+        const c = el(k);
+        if (!c) return;
+        if (c.classList.contains("active")) set(k, "done");
+        else if (!c.classList.contains("done")) set(k, "skipped");
+      });
+      set(stage, "active");
+    }
+    function onStatus(state) {
+      if (state !== "idle") return;   // turn ended: finish whatever was mid-flight
+      order.forEach((k) => { const c = el(k); if (c && c.classList.contains("active")) set(k, "done"); });
+    }
+    return { onTool, onStatus, reset };
+  })();
+
+  function handle(ev) {
+    const e = JSON.parse(ev.data);
+    switch (e.type) {
+      case "user": lastAssistant = null; addMessage("user", e.text); break;
+      case "assistant":
+        // Consecutive text blocks of one reply flow into one bubble, re-rendered
+        // from the accumulated markdown source each time a block arrives.
+        if (lastAssistant) {
+          const stick = atBottom(transcript);
+          lastAssistant._md += "\n\n" + e.text;
+          lastAssistant.innerHTML = renderMarkdown(lastAssistant._md);
+          if (stick) scrollDown(transcript);
+        } else {
+          lastAssistant = addMessage("assistant", e.text, true);
+        }
+        break;
+      case "tool": lastAssistant = null; addMessage("tool", e.text); pipeline.onTool(e.text); break;
+      case "error": lastAssistant = null; addMessage("error", e.text); break;
+      case "progress": addProgress(e.stream, e.line); break;
+      case "status": setState(e.state); pipeline.onStatus(e.state); break;
+    }
+  }
+
+  function connect() {
+    const es = new EventSource("/events");
+    for (const t of ["user", "assistant", "tool", "error", "progress", "status"]) {
+      es.addEventListener(t, handle);
+    }
+    es.onerror = () => setState("offline");   // EventSource reconnects on its own
+  }
+
+  async function post(path, body) {
+    const r = await fetch(path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!r.ok) {
+      let msg = r.statusText;
+      try { msg = (await r.json()).error || msg; } catch (_) {}
+      addMessage("error", `${path}: ${msg}`);
+    }
+  }
+
+  $("composer").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = ""; autosize();
+    await post("/send", { text });
+  });
+  stopBtn.addEventListener("click", () => post("/interrupt"));
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); sendBtn.click(); }
+  });
+  // `T` toggles theme, but never while typing in the composer.
+  document.addEventListener("keydown", (ev) => {
+    if ((ev.key === "t" || ev.key === "T") && document.activeElement !== input &&
+        !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
+      applyTheme(root.classList.contains("dark") ? "light" : "dark");
+    }
+  });
+  function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + "px"; }
+  input.addEventListener("input", autosize);
+
+  fetch("/auth").then(r => r.json()).then(a => {
+    const el = $("auth");
+    el.textContent = "auth: " + a.label + (a.detail ? " — " + a.detail : "");
+    el.className = a.ok ? "" : "bad";
+  }).catch(() => {});
+
+  connect();
+})();
+</script>
+</body>
+</html>

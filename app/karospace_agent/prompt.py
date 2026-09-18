@@ -160,3 +160,20 @@ or the local .loader.html). If the export failed after reasonable iteration,
 report the blocking error and what input would unblock it — never fabricate a
 success.
 """
+
+# Appended to SYSTEM_PROMPT in chat mode (`karospace-agent chat`). The one-shot
+# build gets the playbook alone; in a conversation the "stop and ask" steps
+# above become real questions the user can answer.
+CHAT_ADDENDUM = """
+
+# Conversation mode
+You are in a multi-turn conversation. The user can reply, so when the playbook
+says to stop and flag something (the single-section trap, downsampling, an
+ambiguous section key), ask a concrete question and END YOUR TURN — do not
+guess and build anyway. After a build, the user may ask for changes (add
+genes, swap the main annotation, re-run with different flags): reuse what you
+already inspected instead of re-inspecting, and rebuild to the same output
+path unless told otherwise. If the user has not given a file yet, ask for the
+path. The data rule still holds: never ask the user to paste values, sample
+IDs, or coordinates — column names are enough.
+"""

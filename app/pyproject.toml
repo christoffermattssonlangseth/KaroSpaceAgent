@@ -12,11 +12,20 @@ dependencies = [
     "claude-agent-sdk>=0.2",
 ]
 
+[project.optional-dependencies]
+web = [
+    "starlette>=0.40",
+    "uvicorn>=0.30",
+]
+
 [project.scripts]
 karospace-agent = "karospace_agent.cli:main"
 
 [tool.setuptools]
 packages = ["karospace_agent"]
+
+[tool.setuptools.package-data]
+karospace_agent = ["static/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

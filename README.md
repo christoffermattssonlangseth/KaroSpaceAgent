@@ -85,13 +85,76 @@ locally).
 
 ```bash
 cd app && pip install -e .             # pulls claude-agent-sdk
-export ANTHROPIC_API_KEY=sk-ant-...    # the model runs on Anthropic's servers
+karospace-agent auth                   # which Claude credential will be used, and how to sign in
 karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type"
 ```
+
+## Authentication
+
+The model runs on Anthropic's servers, so a credential is needed. Two routes are
+supported, and `karospace-agent auth` tells you which one is active:
+
+- **Sign in with a Console account (recommended, no key to paste).** Run
+  `claude`, pick *Anthropic Console account*, then *Sign in with your Console
+  account*, and finish in the browser. That stores an auto-refreshing login
+  that this app picks up automatically. Usage is billed to your organisation's
+  API credits under Anthropic's commercial terms, which is also where an
+  organisation manages data-retention settings — the right footing for human
+  data.
+- **An API key.** `export ANTHROPIC_API_KEY=sk-ant-...` from
+  [platform.claude.com](https://platform.claude.com). Workload Identity
+  Federation and cloud providers (Bedrock, Vertex, Foundry) work too.
+
+**A claude.ai subscription login (Pro/Max/Team/Enterprise, or a
+`claude setup-token`) is not permitted.** Anthropic's Agent SDK terms reserve
+claude.ai logins for Claude Code and claude.ai themselves; third-party agents
+must use the routes above. The preflight warns if it finds one and refuses to
+call it a working setup.
 
 The second argument (the plain-English intent) is optional; without it the agent
 picks sensible defaults from the schema. See
 [`app/README.md`](app/README.md) for layout, config, and tests.
+
+### Chat mode
+
+`build` is one shot. `chat` keeps the conversation open, so the agent can ask
+you a question (the single-section trap, whether to downsample) and act on your
+answer, and you can iterate on a built viewer without starting over:
+
+```bash
+karospace-agent chat ~/data/my_xenium.h5ad "grid by sample"   # opens with a build
+karospace-agent chat                                          # or just start talking
+```
+
+```
+you> add Cd4 and Cd8a to the preloaded features and rebuild
+you> /quit
+```
+
+Ctrl-C while the agent is working interrupts that turn and returns you to the
+prompt (twice quits); at the prompt it exits.
+
+### Browser mode
+
+The same conversation in a browser tab, for people who would rather not live
+in a terminal:
+
+```bash
+pip install -e '.[web]'                     # adds starlette + uvicorn
+karospace-agent web ~/data/my_xenium.h5ad "grid by sample"
+# -> http://127.0.0.1:8765/
+```
+
+It serves one conversation on localhost: model replies, tool calls, and the
+live export log (collapsible), with a Stop button that interrupts the running
+turn. Refreshing the tab replays the transcript. The server must run on the
+machine that holds the data — the tools spawn `karospace` locally — and it has
+no auth, so keep it on `127.0.0.1` (the default; `--host` warns otherwise).
+
+Same tools, same prompt, same boundary — only the schema reaches the model
+through the tools. The one new channel is you: what you type is sent to
+Anthropic as-is, so give file paths and column *names*, never sample IDs,
+coordinates, or other values. The agent is told never to ask for them.
 
 ## Using it inside Claude Code
 

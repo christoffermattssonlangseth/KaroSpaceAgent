@@ -56,3 +56,39 @@ def test_run_merge_builds_repeated_section_flags(monkeypatch):
     assert argv.count("--section") == 2
     assert "P1_L:/a.h5ad:Lesional" in argv
     assert argv[-2:] == ["--output", "/m.h5ad"]
+
+
+def test_run_streams_lines_to_on_line_sink():
+    seen = []
+    rr = commands.run(
+        ["python", "-c", "import sys; print('a'); print('b'); print('e', file=sys.stderr)"],
+        on_line=lambda stream, line: seen.append((stream, line.rstrip())),
+    )
+    assert rr.ok
+    assert ("stdout", "a") in seen and ("stdout", "b") in seen
+    assert ("stderr", "e") in seen
+    # The captured text is unaffected by where the sink sends it.
+    assert rr.stdout == "a\nb\n"
+
+
+def test_set_progress_sink_installs_and_resets(monkeypatch):
+    seen = []
+    commands.set_progress_sink(lambda s, l: seen.append(l))
+    try:
+        commands.run(["python", "-c", "print('hi')"])
+    finally:
+        commands.set_progress_sink(None)
+    assert seen == ["hi\n"]
+    # Reset -> default: console when streaming on, silent when off.
+    monkeypatch.setenv("KAROSPACE_AGENT_STREAM", "0")
+    assert commands.get_progress_sink() is commands.null_sink
+    monkeypatch.setenv("KAROSPACE_AGENT_STREAM", "1")
+    assert commands.get_progress_sink() is commands.console_sink
+
+
+def test_broken_sink_never_breaks_the_run():
+    def boom(stream, line):
+        raise RuntimeError("sink died")
+
+    rr = commands.run(["python", "-c", "print('still ok')"], on_line=boom)
+    assert rr.ok and "still ok" in rr.stdout

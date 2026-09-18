@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -83,28 +84,72 @@ def merge_python() -> str:
     return sys.executable
 
 
-def _streaming_enabled() -> bool:
-    """Live-tee child output to this process's console unless disabled.
+# --- Progress sink ---------------------------------------------------------
+#
+# A ProgressSink receives each line a child process prints, as it prints it:
+# `sink(stream, line)` with stream "stdout" | "stderr". It exists so a front end
+# (the REPL, a web UI) can show live progress from a long export. It is a LOCAL
+# side channel only: whatever the sink does, the model still receives nothing
+# but the captured, sanitized/truncated string the tool layer returns. So
+# karospace's own progress lines can flow to a console or browser freely with
+# no data-boundary concern.
 
-    Set KAROSPACE_AGENT_STREAM=0 to silence (e.g. a hosted service that captures
-    progress some other way). This tee goes to the LOCAL terminal only — it never
-    touches what the model sees. The model still receives only the captured string
-    the tool layer returns (sanitized/truncated). karospace's own progress lines
-    can therefore stream freely without any data-boundary concern.
-    """
-    return os.environ.get("KAROSPACE_AGENT_STREAM", "1") != "0"
+ProgressSink = Callable[[str, str], None]
 
 
-def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
-    """Run a command, capturing stdout/stderr while live-teeing them to the
-    console, and never raise on non-zero exit.
+def console_sink(stream: str, line: str) -> None:
+    """Default sink: tee to this process's own stdout/stderr."""
+    target = sys.stdout if stream == "stdout" else sys.stderr
+    try:
+        target.write(line)
+        target.flush()
+    except Exception:
+        pass  # a closed/broken console must never break the run
+
+
+def null_sink(stream: str, line: str) -> None:
+    """Silent sink (KAROSPACE_AGENT_STREAM=0, or a host that captures output
+    some other way)."""
+
+
+def _default_sink() -> ProgressSink:
+    return null_sink if os.environ.get("KAROSPACE_AGENT_STREAM", "1") == "0" else console_sink
+
+
+_progress_sink: ProgressSink | None = None
+
+
+def set_progress_sink(sink: ProgressSink | None) -> None:
+    """Install a process-wide sink for child-process progress lines.
+
+    `None` restores the default (console, or silent under
+    KAROSPACE_AGENT_STREAM=0). Process-wide because the tool handlers that
+    spawn subprocesses have no per-call hook; one front end per process is the
+    intended shape (a REPL or a web server owning one Session)."""
+    global _progress_sink
+    _progress_sink = sink
+
+
+def get_progress_sink() -> ProgressSink:
+    return _progress_sink if _progress_sink is not None else _default_sink()
+
+
+def run(
+    argv: list[str],
+    timeout: int = DEFAULT_TIMEOUT,
+    on_line: ProgressSink | None = None,
+) -> RunResult:
+    """Run a command, capturing stdout/stderr while streaming each line to the
+    progress sink, and never raise on non-zero exit.
 
     Long exports (feature sidecar, DE, pathway) print incremental progress; we
     pump each pipe on its own thread so the user watches it in real time instead
     of waiting for a silent blocking call to return. The captured text handed back
-    is identical to what a buffered run would have produced.
+    is identical to what a buffered run would have produced. `on_line` overrides
+    the process-wide sink for this call; note it is invoked from the pump
+    threads, not the caller's thread.
     """
-    tee = _streaming_enabled()
+    sink = on_line or get_progress_sink()
     try:
         proc = subprocess.Popen(
             argv,
@@ -120,19 +165,17 @@ def run(argv: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
     out_chunks: list[str] = []
     err_chunks: list[str] = []
 
-    def pump(src, sink, acc: list[str]) -> None:
+    def pump(src, stream: str, acc: list[str]) -> None:
         for line in iter(src.readline, ""):
             acc.append(line)
-            if tee:
-                try:
-                    sink.write(line)
-                    sink.flush()
-                except Exception:
-                    pass  # a closed/broken console must never break the run
+            try:
+                sink(stream, line)
+            except Exception:
+                pass  # a misbehaving sink must never break the run
         src.close()
 
-    t_out = threading.Thread(target=pump, args=(proc.stdout, sys.stdout, out_chunks), daemon=True)
-    t_err = threading.Thread(target=pump, args=(proc.stderr, sys.stderr, err_chunks), daemon=True)
+    t_out = threading.Thread(target=pump, args=(proc.stdout, "stdout", out_chunks), daemon=True)
+    t_err = threading.Thread(target=pump, args=(proc.stderr, "stderr", err_chunks), daemon=True)
     t_out.start()
     t_err.start()
 

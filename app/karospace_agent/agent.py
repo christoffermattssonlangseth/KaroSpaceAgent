@@ -33,7 +33,7 @@ from claude_agent_sdk import (
     query,
 )
 
-from .commands import REPO_ROOT
+from .commands import REPO_ROOT, ProgressSink, set_progress_sink
 from .prompt import CHAT_ADDENDUM, SYSTEM_PROMPT
 from .tools import ALLOWED_TOOL_NAMES, build_server
 
@@ -111,16 +111,27 @@ class Session:
         self,
         model: str = DEFAULT_MODEL,
         out: Callable[[str], None] = _print,
+        on_progress: ProgressSink | None = None,
     ) -> None:
         self._client = ClaudeSDKClient(options=build_options(model, chat=True))
         self._out = out
+        self._on_progress = on_progress
 
     async def __aenter__(self) -> "Session":
+        # `out` gets the model's text and tool calls; `on_progress` gets the
+        # child processes' live log lines (installed process-wide for the life
+        # of the session, restored on exit). Both are local-only channels.
+        if self._on_progress is not None:
+            set_progress_sink(self._on_progress)
         await self._client.connect()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
-        await self._client.disconnect()
+        try:
+            await self._client.disconnect()
+        finally:
+            if self._on_progress is not None:
+                set_progress_sink(None)
 
     async def send(self, text: str) -> str:
         """Send one user turn and stream the reply. Returns the final text."""

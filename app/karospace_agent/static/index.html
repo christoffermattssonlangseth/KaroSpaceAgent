@@ -38,6 +38,8 @@
   #status.offline .dot { background: var(--err); }
   @keyframes pulse { 50% { opacity: 0.3; } }
   header .spacer { flex: 1; }
+  #auth { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  #auth.bad { color: var(--err); }
   header .note { color: var(--muted); font-size: 12px; max-width: 46ch; text-align: right; }
 
   main { overflow: hidden; display: grid; grid-template-rows: 1fr auto; }
@@ -80,6 +82,7 @@
 <header>
   <h1>KaroSpace Agent</h1>
   <span id="status" class="offline"><span class="dot"></span><span id="status-text">connecting…</span></span>
+  <span id="auth" title="Which credential the model runs under"></span>
   <span class="spacer"></span>
   <span class="note">Only sanitized schema reaches the model through its tools. What you type here goes to Anthropic as-is: give paths and column <em>names</em>, never sample IDs, coordinates, or values.</span>
 </header>
@@ -190,6 +193,12 @@
   });
   function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + "px"; }
   input.addEventListener("input", autosize);
+
+  fetch("/auth").then(r => r.json()).then(a => {
+    const el = $("auth");
+    el.textContent = "auth: " + a.label + (a.detail ? " — " + a.detail : "");
+    el.className = a.ok ? "" : "bad";
+  }).catch(() => {});
 
   connect();
 })();

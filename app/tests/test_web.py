@@ -229,3 +229,19 @@ def test_parser_web_defaults_to_localhost():
     assert (args.host, args.port, args.input) == ("127.0.0.1", 8765, None)
     args = cli.build_parser().parse_args(["web", "/d/x.h5ad", "grid", "--port", "9000"])
     assert (args.input, args.intent, args.port) == ("/d/x.h5ad", "grid", 9000)
+
+
+def test_auth_route_reports_label_not_secrets(monkeypatch):
+    from starlette.testclient import TestClient
+    from karospace_agent import auth
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-very-secret")
+    monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    app = web.create_app(session_factory=FakeSession)
+    with TestClient(app) as client:
+        r = client.get("/auth")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and "API key" in body["label"]
+    assert "very-secret" not in r.text

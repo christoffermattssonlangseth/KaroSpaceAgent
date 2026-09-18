@@ -85,9 +85,31 @@ locally).
 
 ```bash
 cd app && pip install -e .             # pulls claude-agent-sdk
-export ANTHROPIC_API_KEY=sk-ant-...    # the model runs on Anthropic's servers
+karospace-agent auth                   # which Claude credential will be used, and how to sign in
 karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type"
 ```
+
+## Authentication
+
+The model runs on Anthropic's servers, so a credential is needed. Two routes are
+supported, and `karospace-agent auth` tells you which one is active:
+
+- **Sign in with a Console account (recommended, no key to paste).** Run
+  `claude`, pick *Anthropic Console account*, then *Sign in with your Console
+  account*, and finish in the browser. That stores an auto-refreshing login
+  that this app picks up automatically. Usage is billed to your organisation's
+  API credits under Anthropic's commercial terms, which is also where an
+  organisation manages data-retention settings — the right footing for human
+  data.
+- **An API key.** `export ANTHROPIC_API_KEY=sk-ant-...` from
+  [platform.claude.com](https://platform.claude.com). Workload Identity
+  Federation and cloud providers (Bedrock, Vertex, Foundry) work too.
+
+**A claude.ai subscription login (Pro/Max/Team/Enterprise, or a
+`claude setup-token`) is not permitted.** Anthropic's Agent SDK terms reserve
+claude.ai logins for Claude Code and claude.ai themselves; third-party agents
+must use the routes above. The preflight warns if it finds one and refuses to
+call it a working setup.
 
 The second argument (the plain-English intent) is optional; without it the agent
 picks sensible defaults from the schema. See

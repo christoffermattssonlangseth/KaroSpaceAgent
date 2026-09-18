@@ -6,6 +6,7 @@ spawn `karospace` on the .h5ad locally; it binds 127.0.0.1 by default and has
 no auth, so treat it as a local app with a browser window, not a service.
 
     GET  /            the page
+    GET  /auth        which credential the model runs under (label only)
     GET  /events      Server-Sent Events: transcript replay, then live
     POST /send        {"text": ...} -> queued as the next user turn
     POST /interrupt   stop the running turn
@@ -24,7 +25,7 @@ import json
 from collections.abc import AsyncIterator, Callable
 from importlib import resources
 
-from . import agent
+from . import agent, auth
 
 try:
     from starlette.applications import Starlette
@@ -201,6 +202,12 @@ def create_app(
     async def index(request: Request):
         return HTMLResponse(_page())
 
+    async def auth_status(request: Request):
+        status = auth.detect()
+        return JSONResponse(
+            {"label": status.label, "detail": status.detail, "ok": status.ok}
+        )
+
     async def events(request: Request):
         raw = request.headers.get("last-event-id") or request.query_params.get("since")
         last_id = int(raw) if raw and raw.isdigit() else None
@@ -237,6 +244,7 @@ def create_app(
     app = Starlette(
         routes=[
             Route("/", index),
+            Route("/auth", auth_status),
             Route("/events", events),
             Route("/send", send, methods=["POST"]),
             Route("/interrupt", interrupt, methods=["POST"]),

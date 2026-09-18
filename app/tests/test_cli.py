@@ -178,3 +178,34 @@ def test_ainput_reads_on_a_daemon_thread_and_returns_eof_as_none():
 
     assert asyncio.run(cli._ainput(read)) is None
     assert names == [("karospace-agent-stdin", True)]
+
+
+def test_auth_report_variants():
+    from karospace_agent import auth
+
+    text, code = cli.auth_report(auth.AuthStatus("api_key", "API key (ANTHROPIC_API_KEY)", True))
+    assert code == 0 and "permitted" in text
+    text, code = cli.auth_report(auth.AuthStatus(None, "none", False, "no credential found"))
+    assert code == 1 and "Console account" in text
+    text, code = cli.auth_report(
+        auth.AuthStatus("claudeai_login", "claude.ai login (max)", False, "not permitted")
+    )
+    assert code == 3 and "NOT PERMITTED" in text and "Console account" in text
+
+
+def test_preflight_warns_without_credential(monkeypatch):
+    from karospace_agent import auth
+
+    monkeypatch.setattr(auth, "detect", lambda: auth.AuthStatus(None, "none", False, "no credential found"))
+    notes = cli._preflight()
+    assert any("no usable Claude credential" in n for n in notes)
+    monkeypatch.setattr(auth, "detect", lambda: auth.AuthStatus("api_key", "API key", True))
+    assert not any("credential" in n for n in cli._preflight())
+
+
+def test_auth_subcommand_exit_code(monkeypatch, capsys):
+    from karospace_agent import auth
+
+    monkeypatch.setattr(auth, "detect", lambda: auth.AuthStatus("console_profile", "Console sign-in", True))
+    assert cli.main(["auth"]) == 0
+    assert "Console sign-in" in capsys.readouterr().out

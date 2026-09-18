@@ -17,7 +17,7 @@ import sys
 import threading
 from collections.abc import Callable
 
-from . import agent
+from . import agent, auth
 from .commands import companion_bin, karospace_bin
 
 try:  # line editing + history at the `you>` prompt, where available
@@ -39,6 +39,9 @@ sample IDs, coordinates, or other data values."""
 def _preflight() -> list[str]:
     """Non-fatal environment notes surfaced before a run."""
     notes = []
+    status = auth.detect()
+    if not status.ok:
+        notes.append(_auth_warning(status))
     if karospace_bin() is None:
         notes.append("karospace not found on PATH (set KAROSPACE_BIN) — required.")
     if companion_bin() is None:
@@ -47,6 +50,41 @@ def _preflight() -> list[str]:
             "(build ../KaroSpaceCompanion or set KAROSPACE_COMPANION)."
         )
     return notes
+
+
+def _auth_warning(status: auth.AuthStatus) -> str:
+    if status.source is None:
+        return (
+            f"no usable Claude credential ({status.detail}). "
+            "Run `karospace-agent auth` for how to sign in."
+        )
+    return (
+        f"{status.label}: {status.detail}. "
+        "Run `karospace-agent auth` for the permitted options."
+    )
+
+
+def auth_report(status: auth.AuthStatus | None = None) -> tuple[str, int]:
+    """Text + exit code for `karospace-agent auth`: 0 usable, 1 none, 3 not permitted."""
+    status = status or auth.detect()
+    lines = [status.line()]
+    if status.ok:
+        lines.append("This is a permitted credential for karospace-agent.")
+        code = 0
+    elif status.source is None:
+        lines.append("")
+        lines.append(auth.CONSOLE_SIGNIN_HELP)
+        code = 1
+    else:
+        lines.append(
+            "NOT PERMITTED for this app: Anthropic's terms reserve claude.ai logins "
+            "and subscription tokens for Claude Code and claude.ai themselves, and the "
+            "Agent SDK docs say third-party agents must use the API routes instead."
+        )
+        lines.append("")
+        lines.append(auth.CONSOLE_SIGNIN_HELP)
+        code = 3
+    return "\n".join(lines), code
 
 
 def _compose_prompt(input_path: str, intent: str) -> str:
@@ -219,6 +257,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Model alias or id (default: {agent.DEFAULT_MODEL}).",
     )
 
+    sub.add_parser(
+        "auth",
+        help="Show which Claude credential will be used, and how to sign in.",
+    )
+
     w = sub.add_parser(
         "web",
         help="Serve a local browser chat over the same session (needs the "
@@ -239,6 +282,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    if args.command == "auth":
+        text, code = auth_report()
+        print(text)
+        return code
+
     for note in _preflight():
         print(f"warning: {note}", file=sys.stderr)
 
@@ -253,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "chat":
         print(CHAT_BANNER, file=sys.stderr)
+        print(auth.detect().line(), file=sys.stderr)
         try:
             asyncio.run(_chat(args.input, args.intent, args.model))
         except (KeyboardInterrupt, asyncio.CancelledError):

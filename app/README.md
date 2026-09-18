@@ -27,6 +27,14 @@ Requires `karospace` on PATH. The Rust companion is optional; the app finds it a
 `../../KaroSpaceCompanion/target/release/karospace-companion` or via
 `KAROSPACE_COMPANION`.
 
+Then `karospace-agent auth` — it reports which Claude credential the model will
+run under (a Console sign-in via `claude` `/login`, an API key, federation, or a
+cloud provider) and prints sign-in instructions if none is found. A claude.ai
+subscription login is flagged as not permitted for this app; see the root README
+→ *Authentication* for why. `auth.py` mirrors Claude Code's credential
+precedence from the outside, reading env-var presence and file key names only,
+never a secret value.
+
 ## Use
 
 ```bash
@@ -76,7 +84,8 @@ default and no auth: it is a local app with a browser window, not a service.
 | `tools.py` | The seven `@tool` local hands, each returning sanitized text. |
 | `prompt.py` | System prompt — the viewer-building playbook, ported to the tools. |
 | `agent.py` | Builds `ClaudeAgentOptions` (built-ins off); `run()` for one-shot builds, `Session` for multi-turn chat. |
-| `cli.py` | `karospace-agent build <input> "<intent>"`, `karospace-agent chat [input] ["<intent>"]` (the REPL), and `karospace-agent web`. |
+| `auth.py` | Detects which credential the CLI subprocess will use and whether it is permitted; no secret is read. |
+| `cli.py` | `karospace-agent build <input> "<intent>"`, `karospace-agent chat [input] ["<intent>"]` (the REPL), `karospace-agent web`, and `karospace-agent auth`. |
 | `web.py` | The browser front end: Starlette app, SSE event hub, one-turn-at-a-time worker (optional `[web]` extra). |
 | `static/index.html` | The single-file page `web.py` serves. |
 
@@ -100,5 +109,6 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q
 `test_sanitize.py` and `test_commands.py` cover the boundary and command layers —
 they run without the SDK or a live model. `test_cli.py` covers the chat REPL
 with a scripted stdin and a fake session, and `test_web.py` the event hub, turn
-worker, and HTTP routes (both need the SDK importable, no model). (The `PYTEST_DISABLE_PLUGIN_AUTOLOAD`
+worker, and HTTP routes (both need the SDK importable, no model). `test_auth.py`
+covers credential precedence against temp config dirs. (The `PYTEST_DISABLE_PLUGIN_AUTOLOAD`
 flag sidesteps an unrelated broken pytest plugin in some conda envs.)

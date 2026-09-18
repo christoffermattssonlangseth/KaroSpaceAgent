@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KaroSpace Agent</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1c1f24; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #2f6fed; --accent-ink: #ffffff;
+    --user: #e8effd; --tool: #f1f3f6; --err: #b42318; --err-bg: #fdecec;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101215; --panel: #181b20; --ink: #e6e8eb; --muted: #9aa3ad;
+      --line: #2a2f37; --accent: #5b8cff; --user: #1f2a44; --tool: #1f232a;
+      --err: #ff8a80; --err-bg: #3a1d1b;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid; grid-template-rows: auto 1fr auto; gap: 0;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+  #status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  #status .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  #status.working .dot { background: var(--accent); animation: pulse 1.2s infinite; }
+  #status.interrupting .dot { background: #f59e0b; animation: pulse 0.5s infinite; }
+  #status.offline .dot { background: var(--err); }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  header .spacer { flex: 1; }
+  header .note { color: var(--muted); font-size: 12px; max-width: 46ch; text-align: right; }
+
+  main { overflow: hidden; display: grid; grid-template-rows: 1fr auto; }
+  #transcript { overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 80ch; padding: 10px 14px; border-radius: 12px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--user); }
+  .msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+  .msg.tool { align-self: flex-start; background: var(--tool); color: var(--muted); font: 12.5px/1.4 var(--mono); padding: 6px 10px; border-radius: 8px; }
+  .msg.tool::before { content: "⚙ "; }
+  .msg.error { align-self: stretch; background: var(--err-bg); color: var(--err); font-family: var(--mono); font-size: 13px; }
+
+  details#progress { border-top: 1px solid var(--line); background: var(--panel); }
+  details#progress summary { cursor: pointer; padding: 6px 16px; color: var(--muted); font-size: 13px; user-select: none; }
+  details#progress summary span { font-family: var(--mono); }
+  #log {
+    max-height: 26vh; overflow-y: auto; margin: 0; padding: 8px 16px 12px;
+    font: 12px/1.45 var(--mono); color: var(--muted); white-space: pre-wrap;
+  }
+  #log .stderr { color: var(--ink); }
+
+  footer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px; }
+  form { display: flex; gap: 8px; align-items: flex-end; max-width: 100ch; margin: 0 auto; }
+  textarea {
+    flex: 1; resize: none; min-height: 44px; max-height: 40vh; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink);
+    font: inherit;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    padding: 10px 16px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); font: inherit; cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  footer .hint { max-width: 100ch; margin: 6px auto 0; color: var(--muted); font-size: 12px; }
+  footer .hint kbd { font-family: var(--mono); font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>KaroSpace Agent</h1>
+  <span id="status" class="offline"><span class="dot"></span><span id="status-text">connecting…</span></span>
+  <span class="spacer"></span>
+  <span class="note">Only sanitized schema reaches the model through its tools. What you type here goes to Anthropic as-is: give paths and column <em>names</em>, never sample IDs, coordinates, or values.</span>
+</header>
+<main>
+  <div id="transcript"></div>
+  <details id="progress">
+    <summary>Export progress <span id="log-count">(0 lines)</span></summary>
+    <pre id="log"></pre>
+  </details>
+</main>
+<footer>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="e.g. Build a viewer from /data/my_xenium.h5ad, grid by sample, colour by cell_type" autofocus></textarea>
+    <button type="button" id="stop" disabled>Stop</button>
+    <button type="submit" id="send" class="primary">Send</button>
+  </form>
+  <div class="hint"><kbd>Enter</kbd> sends, <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line. Stop interrupts the current turn; queued messages still run.</div>
+</footer>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const transcript = $("transcript"), log = $("log"), logCount = $("log-count");
+  const status = $("status"), statusText = $("status-text");
+  const input = $("input"), sendBtn = $("send"), stopBtn = $("stop");
+  let lines = 0, lastAssistant = null;
+  const MAX_LOG_LINES = 5000;
+
+  function scrollDown(el) { el.scrollTop = el.scrollHeight; }
+  function atBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeight < 40; }
+
+  function addMessage(kind, text) {
+    const stick = atBottom(transcript);
+    const div = document.createElement("div");
+    div.className = "msg " + kind;
+    div.textContent = text;
+    transcript.appendChild(div);
+    if (stick) scrollDown(transcript);
+    return div;
+  }
+
+  function setState(state) {
+    status.className = state;
+    statusText.textContent = ({
+      idle: "idle", working: "working…", interrupting: "stopping…", offline: "disconnected",
+    })[state] || state;
+    stopBtn.disabled = state !== "working";
+  }
+
+  function addProgress(stream, line) {
+    const stick = atBottom(log);
+    const span = document.createElement("span");
+    span.className = stream;
+    span.textContent = line + "\n";
+    log.appendChild(span);
+    lines += 1;
+    while (log.childNodes.length > MAX_LOG_LINES) log.removeChild(log.firstChild);
+    logCount.textContent = `(${lines} lines)`;
+    if (stick) scrollDown(log);
+  }
+
+  function handle(ev) {
+    const e = JSON.parse(ev.data);
+    switch (e.type) {
+      case "user": lastAssistant = null; addMessage("user", e.text); break;
+      case "assistant":
+        // Consecutive text blocks of one reply flow into one bubble.
+        if (lastAssistant) { lastAssistant.textContent += "\n\n" + e.text; }
+        else { lastAssistant = addMessage("assistant", e.text); }
+        break;
+      case "tool": lastAssistant = null; addMessage("tool", e.text); break;
+      case "error": lastAssistant = null; addMessage("error", e.text); break;
+      case "progress": addProgress(e.stream, e.line); break;
+      case "status": setState(e.state); break;
+    }
+  }
+
+  function connect() {
+    const es = new EventSource("/events");
+    for (const t of ["user", "assistant", "tool", "error", "progress", "status"]) {
+      es.addEventListener(t, handle);
+    }
+    es.onerror = () => setState("offline");   // EventSource reconnects on its own
+  }
+
+  async function post(path, body) {
+    const r = await fetch(path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!r.ok) {
+      let msg = r.statusText;
+      try { msg = (await r.json()).error || msg; } catch (_) {}
+      addMessage("error", `${path}: ${msg}`);
+    }
+  }
+
+  $("composer").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = ""; autosize();
+    await post("/send", { text });
+  });
+  stopBtn.addEventListener("click", () => post("/interrupt"));
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); sendBtn.click(); }
+  });
+  function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + "px"; }
+  input.addEventListener("input", autosize);
+
+  connect();
+})();
+</script>
+</body>
+</html>

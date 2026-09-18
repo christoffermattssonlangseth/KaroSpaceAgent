@@ -1,5 +1,5 @@
-"""`karospace-agent build <input> "<intent>"` and `karospace-agent chat` — the
-entry points.
+"""`karospace-agent build <input> "<intent>"`, `karospace-agent chat`, and
+`karospace-agent web` — the entry points.
 
 `build` composes the user's file + plain-English intent into one message and
 hands it to the one-shot agent loop. `chat` opens a multi-turn session: the
@@ -218,6 +218,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=agent.DEFAULT_MODEL,
         help=f"Model alias or id (default: {agent.DEFAULT_MODEL}).",
     )
+
+    w = sub.add_parser(
+        "web",
+        help="Serve a local browser chat over the same session (needs the "
+        "'web' extra: pip install 'karospace-agent[web]').",
+    )
+    w.add_argument("input", nargs="?", default=None, help="Optional file to build first.")
+    w.add_argument("intent", nargs="?", default="", help="Intent for the opening build.")
+    w.add_argument("--host", default="127.0.0.1", help="Bind address (default: localhost only).")
+    w.add_argument("--port", type=int, default=8765, help="Port (default: 8765).")
+    w.add_argument(
+        "--model",
+        default=agent.DEFAULT_MODEL,
+        help=f"Model alias or id (default: {agent.DEFAULT_MODEL}).",
+    )
     return p
 
 
@@ -242,6 +257,27 @@ def main(argv: list[str] | None = None) -> int:
             asyncio.run(_chat(args.input, args.intent, args.model))
         except (KeyboardInterrupt, asyncio.CancelledError):
             print("\nInterrupted.", file=sys.stderr)
+            return 130
+        return 0
+
+    if args.command == "web":
+        try:
+            from . import web
+        except ImportError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        first = _compose_prompt(args.input, args.intent) if args.input else None
+        if args.host not in ("127.0.0.1", "localhost", "::1"):
+            print(
+                f"warning: binding {args.host} exposes the chat (no auth) to the "
+                "network; anything typed there reaches the model.",
+                file=sys.stderr,
+            )
+        print(f"karospace-agent web: http://{args.host}:{args.port}/  (Ctrl-C to stop)",
+              file=sys.stderr)
+        try:
+            web.serve(host=args.host, port=args.port, model=args.model, opening_message=first)
+        except KeyboardInterrupt:
             return 130
         return 0
 

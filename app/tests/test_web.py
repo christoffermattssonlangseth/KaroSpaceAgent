@@ -1,0 +1,231 @@
+"""The web front end: event log/replay, the turn worker, and the HTTP routes.
+A fake Session stands in for the SDK; no model runs."""
+
+import asyncio
+import json
+
+import pytest
+
+pytest.importorskip("claude_agent_sdk")
+pytest.importorskip("starlette")
+
+from karospace_agent import web  # noqa: E402
+
+
+class FakeSession:
+    """Mimics agent.Session: emits one tool call, one progress line (from a
+    thread, like the real pump), and one text block per turn."""
+
+    instances = []
+
+    def __init__(self, on_event, on_progress):
+        self.on_event = on_event
+        self.on_progress = on_progress
+        self.sent = []
+        self.interrupted = 0
+        self.entered = self.exited = False
+        self.block = None  # set to an Event to make send() wait on it
+        FakeSession.instances.append(self)
+
+    async def __aenter__(self):
+        self.entered = True
+        return self
+
+    async def __aexit__(self, *exc):
+        self.exited = True
+
+    async def send(self, text):
+        self.sent.append(text)
+        self.on_event("tool", "inspect_input({'input_path': 'x.h5ad'})")
+        await asyncio.to_thread(self.on_progress, "stdout", "exporting 1/3\n")
+        await asyncio.sleep(0)  # let the threadsafe publish land
+        if self.block is not None:
+            await self.block.wait()
+        self.on_event("text", f"done: {text}")
+        self.on_event("result", f"done: {text}")
+        return f"done: {text}"
+
+    async def interrupt(self):
+        self.interrupted += 1
+        if self.block is not None:
+            self.block.set()
+
+
+@pytest.fixture(autouse=True)
+def _reset_instances():
+    FakeSession.instances.clear()
+
+
+# --- Hub -------------------------------------------------------------------
+
+def test_hub_assigns_ids_and_replays_since():
+    async def main():
+        hub = web.Hub()
+        hub.loop = asyncio.get_running_loop()
+        hub.publish({"type": "user", "text": "a"})
+        hub.publish({"type": "assistant", "text": "b"})
+        hub.publish_threadsafe({"type": "progress", "stream": "stdout", "line": "c"})
+        await asyncio.sleep(0)
+        assert [e["id"] for e in hub.events] == [0, 1, 2]
+        assert [e["type"] for e in hub.since(None)] == ["user", "assistant", "progress"]
+        assert [e["id"] for e in hub.since(0)] == [1, 2]
+        assert hub.since(2) == []
+
+    asyncio.run(main())
+
+
+def test_hub_caps_progress_in_replay(monkeypatch):
+    monkeypatch.setattr(web, "MAX_PROGRESS_EVENTS", 3)
+    hub = web.Hub()
+    hub.publish({"type": "user", "text": "keep me"})
+    for i in range(5):
+        hub.publish({"type": "progress", "stream": "stdout", "line": str(i)})
+    kept = [e["line"] for e in hub.events if e["type"] == "progress"]
+    assert kept == ["2", "3", "4"]
+    assert hub.events[0]["type"] == "user"  # non-progress never dropped
+
+
+def test_event_stream_replays_then_streams_live():
+    async def main():
+        hub = web.Hub()
+        hub.publish({"type": "user", "text": "old"})
+        gen = web.event_stream(hub, None)
+        first = await asyncio.wait_for(gen.__anext__(), 1)
+        assert first.startswith("id: 0\nevent: user\n")
+        assert json.loads(first.split("data: ", 1)[1]) == {"id": 0, "type": "user", "text": "old"}
+        hub.publish({"type": "status", "state": "working"})
+        live = await asyncio.wait_for(gen.__anext__(), 1)
+        assert "event: status" in live
+        await gen.aclose()
+        assert hub._subscribers == set()
+
+    asyncio.run(main())
+
+
+def test_event_stream_heartbeats_when_quiet(monkeypatch):
+    monkeypatch.setattr(web, "HEARTBEAT_SECONDS", 0.01)
+
+    async def main():
+        gen = web.event_stream(web.Hub(), None)
+        assert await asyncio.wait_for(gen.__anext__(), 1) == ": ping\n\n"
+        await gen.aclose()
+
+    asyncio.run(main())
+
+
+# --- Conversation ----------------------------------------------------------
+
+def test_conversation_runs_turns_in_order_and_publishes_events():
+    async def main():
+        hub = web.Hub()
+        convo = web.Conversation(hub, FakeSession)
+        await convo.start()
+        convo.send("first")
+        convo.send("second")
+        await _until(lambda: convo.state == "idle" and len(FakeSession.instances[0].sent) == 2)
+        await convo.stop()
+
+        s = FakeSession.instances[0]
+        assert s.entered and s.exited
+        assert s.sent == ["first", "second"]
+        types = [e["type"] for e in hub.events]
+        assert types.count("user") == 2
+        assert types.count("tool") == 2
+        assert types.count("progress") == 2
+        assert types.count("assistant") == 2
+        # user event precedes that turn's outputs
+        assert types.index("user") < types.index("tool")
+        assert hub.events[-1] == {"id": hub.events[-1]["id"], "type": "status", "state": "idle"}
+
+    asyncio.run(main())
+
+
+def test_conversation_interrupt_only_while_working():
+    async def main():
+        hub = web.Hub()
+        convo = web.Conversation(hub, FakeSession)
+        await convo.start()
+        s = FakeSession.instances[0]
+        await convo.interrupt()  # idle: no-op
+        assert s.interrupted == 0
+
+        s.block = asyncio.Event()
+        convo.send("slow")
+        await _until(lambda: convo.state == "working" and s.sent == ["slow"])
+        await convo.interrupt()
+        assert s.interrupted == 1
+        await _until(lambda: convo.state == "idle")
+        states = [e["state"] for e in hub.events if e["type"] == "status"]
+        assert states[-3:] == ["working", "interrupting", "idle"]
+        await convo.stop()
+
+    asyncio.run(main())
+
+
+def test_conversation_survives_a_failing_turn():
+    class Boom(FakeSession):
+        async def send(self, text):
+            raise RuntimeError("transport died")
+
+    async def main():
+        hub = web.Hub()
+        convo = web.Conversation(hub, Boom)
+        await convo.start()
+        convo.send("x")
+        await _until(lambda: any(e["type"] == "error" for e in hub.events))
+        assert "RuntimeError: transport died" in [e.get("text") for e in hub.events]
+        await _until(lambda: convo.state == "idle")
+        convo.send("y")  # still accepting turns
+        await _until(lambda: len(FakeSession.instances[0].sent) == 0 and convo._queue.empty())
+        await convo.stop()
+
+    asyncio.run(main())
+
+
+async def _until(pred, timeout=2.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not pred():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not met in time")
+        await asyncio.sleep(0.005)
+
+
+# --- HTTP ------------------------------------------------------------------
+
+def test_routes_end_to_end():
+    from starlette.testclient import TestClient
+
+    app = web.create_app(session_factory=FakeSession, opening_message="open with build")
+    with TestClient(app) as client:
+        r = client.get("/")
+        assert r.status_code == 200 and "KaroSpace Agent" in r.text
+        assert "never sample IDs" in r.text  # the boundary note is on the page
+
+        assert client.post("/send", json={"text": "  "}).status_code == 400
+        assert client.post("/send", content=b"nope").status_code == 400
+        r = client.post("/send", json={"text": "hello"})
+        assert r.status_code == 202 and "queued" in r.json()
+
+        r = client.post("/interrupt")
+        assert r.status_code == 202 and r.json()["state"] in {"idle", "working", "interrupting"}
+
+        convo = app.state.conversation
+        # Both the opening build and the user's message reach the session.
+        import time
+        for _ in range(200):
+            if FakeSession.instances and FakeSession.instances[0].sent == ["open with build", "hello"]:
+                break
+            time.sleep(0.01)
+        assert FakeSession.instances[0].sent == ["open with build", "hello"]
+        texts = [e["text"] for e in convo.hub.events if e["type"] == "user"]
+        assert texts == ["open with build", "hello"]
+    assert FakeSession.instances[0].exited  # lifespan shutdown closed the session
+
+
+def test_parser_web_defaults_to_localhost():
+    from karospace_agent import cli
+
+    args = cli.build_parser().parse_args(["web"])
+    assert (args.host, args.port, args.input) == ("127.0.0.1", 8765, None)
+    args = cli.build_parser().parse_args(["web", "/d/x.h5ad", "grid", "--port", "9000"])
+    assert (args.input, args.intent, args.port) == ("/d/x.h5ad", "grid", 9000)

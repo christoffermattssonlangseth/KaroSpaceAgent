@@ -56,23 +56,36 @@ def build_options(model: str = DEFAULT_MODEL, chat: bool = False) -> ClaudeAgent
     )
 
 
-def _print(text: str) -> None:
-    print(text, flush=True)
+# What a front end receives from a turn, as (kind, text):
+#   "text"  — a block of the model's reply
+#   "tool"  — one tool call, rendered as `name(args…)`
+#   "result"— the turn's final text (the ResultMessage)
+EventSink = Callable[[str, str], None]
 
 
-def _emit(message: object, out: Callable[[str], None] = _print) -> str | None:
-    """Render one SDK message to `out`. Returns the final result text when the
-    message is the turn's ResultMessage, else None."""
+def console_events(kind: str, text: str) -> None:
+    """Default sink: the model's text and tool calls to stdout."""
+    if kind == "text":
+        print(text, flush=True)
+    elif kind == "tool":
+        print(f"  · {text}", flush=True)
+
+
+def _emit(message: object, on_event: EventSink = console_events) -> str | None:
+    """Fan one SDK message out to `on_event`. Returns the final result text when
+    the message is the turn's ResultMessage, else None."""
     if isinstance(message, AssistantMessage):
         for block in message.content:
             if isinstance(block, TextBlock):
-                out(block.text)
+                on_event("text", block.text)
             elif isinstance(block, ToolUseBlock):
-                out(f"  · {block.name}({_brief(block.input)})")
+                on_event("tool", f"{block.name}({_brief(block.input)})")
             elif isinstance(block, ToolResultBlock):
                 pass  # results are large + already sanitized; don't echo
     elif isinstance(message, ResultMessage):
-        return getattr(message, "result", "") or ""
+        result = getattr(message, "result", "") or ""
+        on_event("result", result)
+        return result
     return None
 
 
@@ -110,15 +123,15 @@ class Session:
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
-        out: Callable[[str], None] = _print,
+        on_event: EventSink = console_events,
         on_progress: ProgressSink | None = None,
     ) -> None:
         self._client = ClaudeSDKClient(options=build_options(model, chat=True))
-        self._out = out
+        self._on_event = on_event
         self._on_progress = on_progress
 
     async def __aenter__(self) -> "Session":
-        # `out` gets the model's text and tool calls; `on_progress` gets the
+        # `on_event` gets the model's text and tool calls; `on_progress` gets the
         # child processes' live log lines (installed process-wide for the life
         # of the session, restored on exit). Both are local-only channels.
         if self._on_progress is not None:
@@ -138,7 +151,7 @@ class Session:
         await self._client.query(text)
         final = ""
         async for message in self._client.receive_response():
-            result = _emit(message, self._out)
+            result = _emit(message, self._on_event)
             if result is not None:
                 final = result
         return final

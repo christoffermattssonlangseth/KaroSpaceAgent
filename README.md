@@ -112,6 +112,23 @@ you> /quit
 Ctrl-C while the agent is working interrupts that turn and returns you to the
 prompt (twice quits); at the prompt it exits.
 
+### Browser mode
+
+The same conversation in a browser tab, for people who would rather not live
+in a terminal:
+
+```bash
+pip install -e '.[web]'                     # adds starlette + uvicorn
+karospace-agent web ~/data/my_xenium.h5ad "grid by sample"
+# -> http://127.0.0.1:8765/
+```
+
+It serves one conversation on localhost: model replies, tool calls, and the
+live export log (collapsible), with a Stop button that interrupts the running
+turn. Refreshing the tab replays the transcript. The server must run on the
+machine that holds the data — the tools spawn `karospace` locally — and it has
+no auth, so keep it on `127.0.0.1` (the default; `--host` warns otherwise).
+
 Same tools, same prompt, same boundary — only the schema reaches the model
 through the tools. The one new channel is you: what you type is sent to
 Anthropic as-is, so give file paths and column *names*, never sample IDs,

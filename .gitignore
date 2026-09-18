@@ -6,6 +6,7 @@
 # Generated viewer output
 output/
 *.html
+!app/karospace_agent/static/*.html   # the web UI's own page, not a viewer
 *.karospace
 *.features.json
 *.features/

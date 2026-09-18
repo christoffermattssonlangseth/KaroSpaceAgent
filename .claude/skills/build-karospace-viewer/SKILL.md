@@ -68,6 +68,19 @@ missing-value counts, **without** running the pipeline. Read it before choosing
 anything. Also skim `karospace --help` if you're unsure a flag exists — do not
 assume.
 
+Then probe the STRUCTURE that `--inspect-input` is blind to (layers, `obsm`,
+`obsp`):
+
+```bash
+python scripts/inspect_structure.py <input.h5ad>   # add --table <name> for .zarr
+```
+
+It prints schema and aggregates only — the X matrix's dtype + storage format and
+an `all_integer` flag, layer names+dtypes, `obsm` keys+column counts, `obsp` keys,
+and a `spatial_graph_present` flag — **no cell values**, so it needs no `sed`
+strip. Two later decisions depend on it: whether a spatial neighbor graph already
+exists (§5) and how X is normalized (§3).
+
 ### 2. Choose the core flags from the metadata
 
 | Flag | How to pick it |
@@ -76,7 +89,7 @@ assume.
 | `--main-cell-annotation` | Primary cell-type column. Prefer a human-readable `cell_type`/`celltype`/`annotation` over clustering when both exist. If only clustering exists, use a mid-resolution one (the plain `leiden` if present) as primary — the rest stay exposed via `--cell-annotations`. |
 | `--section-metadata` | Categorical experimental variables to show as filter chips: `condition`, `stage`, `timepoint`, `region`, `sex`, `genotype`, `treatment`, `model`, `batch`. Pick the ones that vary across sections. |
 | `--cell-annotations` | **Expose EVERY analysis-derived cell annotation, not a curated subset** — users switch between them, so a missed one is a missed view. **Principle (apply it, don't just match names):** a cell annotation is any obs column assigning each cell to a discrete group produced by analysis — clustering, cell-typing, or spatial-domain/niche detection — at any resolution or k. The families are *illustrative, not a whitelist*; catch methods not listed too: clustering (`leiden`, `louvain`, `kmeans`, `walktrap`, `phenograph`, `SNN`, `mclust`, and `<method>_<resolution>` families like `leiden_0_2`…`leiden_4_0`); cell-typing (`cell_type`, `annotation`, `subtype`, `predicted.*`, SingleR/Azimuth-style labels); spatial domains/niches (`CellCharter`, `niche`, `domain`, `UTAG`, `Banksy`, and `<method>_<k>` families like `CellCharter_6`…`CellCharter_30`). The **structural test** is the real net: include any categorical (or low-cardinality integer) obs column, cardinality ~2–300, that isn't an experimental variable (→ `--section-metadata`), an ID (cardinality ≈ cell count, e.g. `cell_id`), or a QC metric. **When unsure, include it.** Never expose ID columns or per-cell continuous QC numerics. **Exception:** columns prefixed `karospace_` (e.g. `karospace_polygon_labels`, `karospace_polygon_count`) and prior-session region/polygon indices (e.g. `polygon_index`) are KaroSpace's *own* round-tripped output from an earlier session, not independent annotations — do **not** sweep them in; mention them so the user can opt in, but leave them out by default. |
-| spatial coords | If `obsm['spatial']` exists, nothing to do. Otherwise pass `--spatial-x`/`--spatial-y` (common names: `x_centroid`/`y_centroid`, `x`/`y`, `center_x`/`center_y`). |
+| spatial coords | The structure probe shows `obsm`: if `obsm['spatial']` exists, nothing to do. Otherwise pass `--spatial-x`/`--spatial-y` (common names: `x_centroid`/`y_centroid`, `x`/`y`, `center_x`/`center_y`). |
 | `--features` | Genes/features to preload. Use whatever biology the user named; otherwise leave to marker auto-embedding. |
 | `--modalities` | If the data has protein + RNA (CosMx/multimodal), pass `rna,protein`; else omit. |
 
@@ -100,6 +113,39 @@ assume.
   `auto`; the local guard is the real gate.
 - `--pathway auto` for RNA-like modalities; set `--pathway-organism` (`Mouse` /
   `Human`) to match the sample.
+
+**Display normalization — choose from the structure, don't accept the default blind.**
+The viewer's coloring values are re-derived by karospace at export, and its
+default is wrong for two common inputs. The logic: (1) if
+`--statistics-normalized-layer` is set and that layer exists, it's used
+**verbatim**; else (2) it takes the counts layer (`--statistics-counts-layer`,
+default `counts`), silently falling back to X when that layer is absent, and (3)
+applies `--statistics-normalization`: default `RC` (relative counts, scale 10000,
+**no log**) or `LogNormalize` (RC then log1p). Both re-normalize whatever step 2
+gave them, so:
+- *Failure A — double normalization:* X is already normalized (`all_integer=no`)
+  with no counts layer → step 2 falls back to X and step 3 re-normalizes it.
+- *Failure B — washed out:* X is raw counts (`all_integer=yes`) and default `RC`
+  applies no log → a few high-count genes saturate the scale.
+
+Pick from the structure probe (verify flags with `--help`):
+- **Preferred (companion route, the §5 default):** the companion writes a
+  `normalized` layer (library-size + log1p) — point the viewer at it verbatim with
+  `--statistics-normalized-layer normalized`. Nothing is re-derived, so neither
+  failure can occur. Use this whenever you build from an enriched file.
+- Direct export, a raw-counts layer present (`all_integer=yes`, named like
+  `counts`/`raw`): `--statistics-counts-layer <name> --statistics-normalization
+  LogNormalize`.
+- Direct export, no counts layer but X `all_integer=yes` (X is raw counts): let
+  the counts layer fall back to X and set `--statistics-normalization LogNormalize`
+  (fixes Failure B).
+- Direct export, X `all_integer=no` with a normalized-looking layer
+  (`normalized`/`lognorm`/`logcounts`/`data`): `--statistics-normalized-layer
+  <name>` (avoids Failure A).
+- Direct export, X `all_integer=no` and no usable layer: there is **no** flag for
+  "use X as-is" (both normalizations re-derive), so run the companion to get a
+  clean `normalized` layer — or, if the user insists on a direct export, warn that
+  the coloring may be doubly-normalized.
 
 ### 4. Size and storage
 
@@ -127,15 +173,15 @@ karospace package-sidecar <viewer.html> --output <name>.karospace
 This adds `<name>.karospace` + `<name>.loader.html` alongside the sidecar files.
 Deliver both unless the user says otherwise.
 
-### 5. Companion pre-processing — DEFAULT: build the spatial graph first
+### 5. Companion pre-processing — DEFAULT: enrich first
 
-For spatial data this is the **default route, not an opt-in.** `karospace` never
-builds a spatial neighbor graph itself — it only *consumes* one from `obsp`; with
-no `obsp['spatial_connectivities']` the viewer silently loses every neighbor /
-enrichment / interaction / spatially-variable-feature tool. `--inspect-input`
-reports obs columns only (no `obsp`/`obsm`), so you can't tell whether a graph is
-already present — assume it is absent and build it. Run the companion **before**
-the export:
+For spatial data this is the **default route, not an opt-in.** The companion does
+several things the viewer needs and `karospace` cannot: it builds the spatial
+neighbor graph (`karospace` only *consumes* one from `obsp`; with no
+`obsp['spatial_connectivities']` the viewer silently loses every neighbor /
+enrichment / interaction / spatially-variable-feature tool), writes a library-size
+`normalized` layer (§3), aggregates, and precomputes viewer analytics. Run it
+**before** the export:
 
 ```
 ../KaroSpaceCompanion/target/release/karospace-companion prepare <input> \
@@ -147,6 +193,16 @@ For large data prefer the fast paths the companion README documents:
 `--viewer-cluster-de-method t-test`, `--skip-viewer-interaction-markers`,
 `--viewer-analytics-columns <cols>` (the categorical columns you will display);
 neighbor-permutation z-scores auto-disable at ≥200k cells.
+
+**An existing graph is not a reason to skip the companion.** If the structure
+probe shows `spatial_graph_present=yes`, the graph is only one of the companion's
+outputs — skipping would drop the `normalized` layer and the analytics. Run it
+anyway. The companion **refuses** to overwrite existing derived outputs and bails
+(*"refusing to replace existing '…' without --overwrite-derived"*), so when the
+probe shows a graph, a `normalized` layer, or `X_karo_*` in `obsm` already
+present, add `--overwrite-derived` to let the pass complete. It re-runs the
+Delaunay graph too, but that's cheap in Rust — the point is not to **miss** the
+rest. (There's no flag to compute only the analytics and keep the existing graph.)
 
 **Fall back gracefully — never fail the whole job because the companion couldn't run:**
 - Binary missing (not built) → export directly from the original file and tell the

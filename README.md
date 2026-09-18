@@ -109,6 +109,9 @@ you> add Cd4 and Cd8a to the preloaded features and rebuild
 you> /quit
 ```
 
+Ctrl-C while the agent is working interrupts that turn and returns you to the
+prompt (twice quits); at the prompt it exits.
+
 Same tools, same prompt, same boundary — only the schema reaches the model
 through the tools. The one new channel is you: what you type is sent to
 Anthropic as-is, so give file paths and column *names*, never sample IDs,

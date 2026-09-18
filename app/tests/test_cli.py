@@ -85,3 +85,96 @@ def test_chat_options_append_addendum_and_keep_boundary():
         assert opts.tools == []
         assert opts.allowed_tools == agent.ALLOWED_TOOL_NAMES
         assert opts.setting_sources is None
+
+
+class GatedSession(FakeSession):
+    """`send` blocks until `interrupt` is called, like a real long turn."""
+
+    def __init__(self):
+        super().__init__()
+        self.interrupted = 0
+        self.gate = asyncio.Event()
+
+    async def send(self, text):
+        self.sent.append(text)
+        await self.gate.wait()
+        return "stopped"
+
+    async def interrupt(self):
+        self.interrupted += 1
+        self.gate.set()
+
+
+def test_first_sigint_interrupts_turn_and_returns_to_prompt():
+    async def main():
+        s = GatedSession()
+        holder = {}
+
+        async def turn():
+            async with cli.TurnInterrupter(s) as ti:
+                holder["ti"] = ti
+                return await s.send("long export")
+
+        t = asyncio.create_task(turn())
+        await asyncio.sleep(0)  # let the turn start and block on the gate
+        holder["ti"].on_sigint()
+        assert await t == "stopped"
+        assert s.interrupted == 1
+
+    asyncio.run(main())
+
+
+def test_second_sigint_cancels_turn():
+    async def main():
+        s = GatedSession()
+        s.interrupt = _never_finishes  # the model ignores the first interrupt
+        holder = {}
+
+        async def turn():
+            async with cli.TurnInterrupter(s) as ti:
+                holder["ti"] = ti
+                return await s.send("stuck")
+
+        t = asyncio.create_task(turn())
+        await asyncio.sleep(0)
+        holder["ti"].on_sigint()
+        await asyncio.sleep(0)
+        holder["ti"].on_sigint()
+        with pytest.raises(asyncio.CancelledError):
+            await t
+        assert t.cancelled()
+
+    asyncio.run(main())
+
+
+async def _never_finishes():
+    await asyncio.sleep(3600)
+
+
+def test_sigint_handler_is_removed_after_turn():
+    import signal
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        s = FakeSession()
+        async with cli.TurnInterrupter(s):
+            pass
+        # Back to the default: add_signal_handler would now be a fresh install,
+        # and removing a handler that is not installed returns False.
+        assert loop.remove_signal_handler(signal.SIGINT) is False
+
+    asyncio.run(main())
+
+
+def test_ainput_reads_on_a_daemon_thread_and_returns_eof_as_none():
+    import threading
+
+    names = []
+
+    def read():
+        t = threading.current_thread()
+        names.append((t.name, t.daemon))
+        return None
+
+    assert asyncio.run(cli._ainput(read)) is None
+    assert names == [("karospace-agent-stdin", True)]

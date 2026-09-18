@@ -46,7 +46,8 @@ karospace-agent chat ~/data/my_xenium.h5ad "grid by sample"
 karospace-agent chat
 ```
 
-Type `/quit` (or Ctrl-D) to leave. `chat` uses the SDK's `ClaudeSDKClient`
+Type `/quit` (or Ctrl-D) to leave; Ctrl-C mid-turn interrupts the model and
+returns to the prompt (a second Ctrl-C quits). `chat` uses the SDK's `ClaudeSDKClient`
 (one session, context kept across turns) with the *same* options as `build`:
 built-ins off, the seven tools, and a short conversation addendum to the system
 prompt. Anything you type goes to the model verbatim, so give paths and column

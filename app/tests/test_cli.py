@@ -73,6 +73,13 @@ def test_compose_prompt_default_intent():
     assert "most useful viewer" in text
 
 
+def test_inspect_structure_is_an_allowed_tool():
+    from karospace_agent import agent, tools
+
+    assert "inspect_structure" in tools.TOOL_NAMES
+    assert "mcp__karospace__inspect_structure" in agent.ALLOWED_TOOL_NAMES
+
+
 def test_chat_options_append_addendum_and_keep_boundary():
     from karospace_agent import agent, prompt
 

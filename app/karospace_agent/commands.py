@@ -27,6 +27,7 @@ from pathlib import Path
 # app/karospace_agent/commands.py -> repo root is parents[2] (karospace_agent, app, root).
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MERGE_SCRIPT = REPO_ROOT / "scripts" / "merge_sections.py"
+STRUCTURE_SCRIPT = REPO_ROOT / "scripts" / "inspect_structure.py"
 
 # Default timeout for a full export (analytics + DE + pathway can be minutes on
 # large data). Override with KAROSPACE_AGENT_TIMEOUT (seconds).
@@ -394,6 +395,22 @@ def run_companion(args: list[str], timeout: int = DEFAULT_TIMEOUT) -> RunResult:
             "(cargo build --release) or set KAROSPACE_COMPANION.",
         )
     return run([binp, *args], timeout=timeout)
+
+
+def run_structure(input_path: str, table: str = "", timeout: int = 600) -> RunResult:
+    """Run scripts/inspect_structure.py — the schema-only structural probe.
+
+    Uses the same scientific interpreter as the merge script (needs h5py/numpy,
+    which live in the karospace environment). Emits only structure and aggregate
+    booleans (never cell values), so unlike inspect_input it needs no example
+    stripping; it does still run with `stream=False` for console-hygiene parity.
+    """
+    if not STRUCTURE_SCRIPT.exists():
+        return RunResult(127, "", f"structure script missing: {STRUCTURE_SCRIPT}")
+    argv = [merge_python(), str(STRUCTURE_SCRIPT), input_path]
+    if table:
+        argv += ["--table", table]
+    return run(argv, timeout=timeout, stream=False)
 
 
 def run_merge(sections: list[str], output: str, timeout: int = DEFAULT_TIMEOUT) -> RunResult:

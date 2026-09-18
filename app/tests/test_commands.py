@@ -86,6 +86,44 @@ def test_companion_version_none_on_failure(monkeypatch):
     assert commands.companion_version("/fake/karospace-companion") is None
 
 
+def test_structure_script_ships_in_the_repo():
+    assert commands.STRUCTURE_SCRIPT.exists()
+
+
+def test_run_structure_missing_script_returns_127(monkeypatch, tmp_path):
+    monkeypatch.setattr(commands, "STRUCTURE_SCRIPT", tmp_path / "nope.py")
+    rr = commands.run_structure("/d/x.h5ad")
+    assert rr.returncode == 127
+    assert "structure script missing" in rr.stderr
+
+
+def test_run_structure_builds_argv_and_table(monkeypatch):
+    captured = {}
+
+    def fake_run(argv, timeout=0, stream=True):
+        captured["argv"] = argv
+        captured["stream"] = stream
+        return commands.RunResult(0, "", "")
+
+    monkeypatch.setattr(commands, "merge_python", lambda: "/py")
+    monkeypatch.setattr(commands, "run", fake_run)
+    commands.run_structure("/d/x.zarr", table="table")
+    argv = captured["argv"]
+    assert argv[0] == "/py" and argv[1].endswith("inspect_structure.py")
+    assert argv[2] == "/d/x.zarr"
+    assert argv[-2:] == ["--table", "table"]
+    # Console-hygiene parity with inspect_input: this run is not live-teed.
+    assert captured["stream"] is False
+
+
+def test_run_structure_omits_table_when_empty(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(commands, "merge_python", lambda: "/py")
+    monkeypatch.setattr(commands, "run", lambda argv, timeout=0, stream=True: captured.update(argv=argv) or commands.RunResult(0, "", ""))
+    commands.run_structure("/d/x.h5ad")
+    assert "--table" not in captured["argv"]
+
+
 def test_run_merge_builds_repeated_section_flags(monkeypatch):
     captured = {}
 

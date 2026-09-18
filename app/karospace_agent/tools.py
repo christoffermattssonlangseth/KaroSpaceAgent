@@ -71,6 +71,30 @@ async def inspect_input(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @tool(
+    "inspect_structure",
+    "Report the STRUCTURE that inspect_input cannot see: the X matrix's dtype and "
+    "storage format and whether its values are all integers (raw counts) or not; "
+    "raw.X if present; the names+dtypes of layers; the keys of obsm (with column "
+    "counts); and the keys of obsp — including a spatial_graph_present flag "
+    "(obsp spatial_connectivities/distances). Runs the local structural probe. "
+    "Schema and aggregates only — matrix dtypes/formats, key NAMES, obsm shapes, "
+    "and one all_integer boolean per matrix; no cell values, coordinates, or "
+    "labels cross. Call it after inspect_input to decide the --statistics-* "
+    "normalization flags and whether the companion still needs to build a graph.",
+    {
+        "input_path": Annotated[str, "Path to the .h5ad file or .zarr store."],
+        "spatialdata_table": Annotated[
+            str, "For a .zarr with multiple tables, the table key. Else ''."
+        ],
+    },
+)
+async def inspect_structure(args: dict[str, Any]) -> dict[str, Any]:
+    table = (args.get("spatialdata_table") or "").strip()
+    rr = commands.run_structure(args["input_path"], table=table)
+    return _report(rr, f"inspect_structure.py {args['input_path']}")
+
+
+@tool(
     "cli_help",
     "Show `karospace --help` (or a verb's help) so you can verify a flag exists "
     "before using it. Never invent flags — check here.",
@@ -182,6 +206,7 @@ async def validate_output(args: dict[str, Any]) -> dict[str, Any]:
 
 ALL_TOOLS = [
     inspect_input,
+    inspect_structure,
     cli_help,
     merge_sections,
     run_companion,

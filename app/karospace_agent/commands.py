@@ -51,10 +51,18 @@ def karospace_bin() -> str | None:
 
 
 def companion_bin() -> str | None:
-    """The Rust companion binary. Env override, else the sibling-repo default."""
+    """The Rust companion binary.
+
+    Resolution order: the KAROSPACE_COMPANION override, the copy bundled inside a
+    frozen .app (so the shipped app carries the default spatial-graph
+    pre-processor), then the sibling-repo release build for dev checkouts.
+    """
     override = os.environ.get("KAROSPACE_COMPANION")
     if override:
         return override if os.path.exists(override) else None
+    bundled = _bundled_companion()
+    if bundled:
+        return bundled
     default = (
         REPO_ROOT.parent
         / "KaroSpaceCompanion"
@@ -63,6 +71,49 @@ def companion_bin() -> str | None:
         / "karospace-companion"
     )
     return str(default) if default.exists() else None
+
+
+def _bundled_companion() -> str | None:
+    """The companion copy shipped inside a PyInstaller bundle, if present.
+
+    The spec adds the binary at the root of the collected tree; depending on the
+    build layout that surfaces under sys._MEIPASS or next to the executable.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    roots: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(Path(meipass))
+    roots.append(Path(sys.executable).resolve().parent)
+    for root in roots:
+        candidate = root / "karospace-companion"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def companion_version(binary: str | None = None) -> str | None:
+    """`karospace-companion --version` (e.g. '0.1.0'), or None if unavailable.
+
+    Used by the preflight to surface which companion the app will drive, so
+    version drift against karospace is at least visible in the startup notes.
+    """
+    binary = binary or companion_bin()
+    if not binary:
+        return None
+    try:
+        out = subprocess.run(
+            [binary, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (out.stdout or out.stderr).strip()
+    # clap prints "karospace-companion 0.1.0" — keep just the version token.
+    return text.split()[-1] if text else None
 
 
 def merge_python() -> str:

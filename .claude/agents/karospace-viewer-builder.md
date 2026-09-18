@@ -11,7 +11,8 @@ You build KaroSpace viewers from raw spatial-transcriptomics data. You drive the
 KaroSpaceAgent repo).
 
 Follow the `build-karospace-viewer` skill's playbook exactly:
-inspect → choose flags → (optional companion) → export → read errors → validate.
+inspect → choose flags → companion (default: build the spatial graph) → export →
+read errors → validate.
 Read `../KaroSpace/README.md` and `../KaroSpaceCompanion/README.md` when you need
 the full flag surface; check `--help` before using any flag you're unsure of.
 
@@ -57,6 +58,13 @@ Decision discipline:
   package. After the export succeeds, package it with
   `karospace package-sidecar <viewer.html> --output <name>.karospace` (no recompute)
   and validate both sets of artifacts exist.
+- **Build the spatial neighbor graph by default.** `karospace` never builds one —
+  it only consumes an `obsp` graph, and inspect can't see `obsp`/`obsm`, so assume
+  it's absent and run the companion first (`prepare <in> --output <enriched> --delaunay
+  --groupby <section-key>`), then export the enriched file. Fall back to a direct
+  export — never fail the whole job — if the companion binary isn't built, or if it
+  errors "no spatial coordinates found" (then use `karospace`'s own `--spatial-x/-y`);
+  note in your report either way. See the skill's §5 for the exact fallback rules.
 - If a flag or column doesn't exist, adapt from the metadata rather than forcing it.
 
 When done, report back concisely: the flags you chose and *why*, whether the

@@ -17,6 +17,14 @@ web = [
     "starlette>=0.40",
     "uvicorn>=0.30",
 ]
+# The native desktop window (`karospace-agent app`). Includes the web extra —
+# it serves the same Starlette app — plus pywebview for the window and
+# pyinstaller for building the signed/notarized `.app` bundle.
+app = [
+    "karospace-agent[web]",
+    "pywebview>=5.0",
+    "pyinstaller>=6.0",
+]
 
 [project.scripts]
 karospace-agent = "karospace_agent.cli:main"

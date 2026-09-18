@@ -203,6 +203,25 @@ def test_preflight_warns_without_credential(monkeypatch):
     assert not any("credential" in n for n in cli._preflight())
 
 
+def test_preflight_notes_companion_version_when_present(monkeypatch):
+    from karospace_agent import auth
+
+    monkeypatch.setattr(auth, "detect", lambda: auth.AuthStatus("api_key", "API key", True))
+    monkeypatch.setattr(cli, "companion_bin", lambda: "/fake/karospace-companion")
+    monkeypatch.setattr(cli, "companion_version", lambda: "0.1.0")
+    notes = cli._preflight()
+    assert any("karospace-companion 0.1.0" in n and "default" in n for n in notes)
+
+
+def test_preflight_warns_when_companion_missing(monkeypatch):
+    from karospace_agent import auth
+
+    monkeypatch.setattr(auth, "detect", lambda: auth.AuthStatus("api_key", "API key", True))
+    monkeypatch.setattr(cli, "companion_bin", lambda: None)
+    notes = cli._preflight()
+    assert any("karospace-companion not found" in n for n in notes)
+
+
 def test_auth_subcommand_exit_code(monkeypatch, capsys):
     from karospace_agent import auth
 

@@ -43,6 +43,49 @@ def test_companion_missing_reports_cleanly(monkeypatch):
     assert "companion" in rr.stderr.lower()
 
 
+def test_bundled_companion_is_none_when_not_frozen(monkeypatch):
+    # A normal (non-frozen) checkout never resolves a bundled binary.
+    monkeypatch.delattr(commands.sys, "frozen", raising=False)
+    assert commands._bundled_companion() is None
+
+
+def test_bundled_companion_found_next_to_executable(monkeypatch, tmp_path):
+    fake_exe = tmp_path / "KaroSpace Agent"
+    fake_exe.write_text("")
+    binary = tmp_path / "karospace-companion"
+    binary.write_text("")
+    monkeypatch.setattr(commands.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(commands.sys, "executable", str(fake_exe))
+    monkeypatch.delattr(commands.sys, "_MEIPASS", raising=False)
+    assert commands._bundled_companion() == str(binary)
+
+
+def test_companion_bin_prefers_env_override(monkeypatch, tmp_path):
+    binary = tmp_path / "karospace-companion"
+    binary.write_text("")
+    monkeypatch.setenv("KAROSPACE_COMPANION", str(binary))
+    assert commands.companion_bin() == str(binary)
+    monkeypatch.setenv("KAROSPACE_COMPANION", str(tmp_path / "missing"))
+    assert commands.companion_bin() is None
+
+
+def test_companion_version_parses_token(monkeypatch):
+    class FakeProc:
+        stdout = "karospace-companion 1.2.3\n"
+        stderr = ""
+
+    monkeypatch.setattr(commands.subprocess, "run", lambda *a, **k: FakeProc())
+    assert commands.companion_version("/fake/karospace-companion") == "1.2.3"
+
+
+def test_companion_version_none_on_failure(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("nope")
+
+    monkeypatch.setattr(commands.subprocess, "run", boom)
+    assert commands.companion_version("/fake/karospace-companion") is None
+
+
 def test_run_merge_builds_repeated_section_flags(monkeypatch):
     captured = {}
 

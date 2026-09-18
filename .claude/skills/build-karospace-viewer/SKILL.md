@@ -127,17 +127,38 @@ karospace package-sidecar <viewer.html> --output <name>.karospace
 This adds `<name>.karospace` + `<name>.loader.html` alongside the sidecar files.
 Deliver both unless the user says otherwise.
 
-### 5. Companion pre-processing — when needed
+### 5. Companion pre-processing — DEFAULT: build the spatial graph first
 
-Run `../KaroSpaceCompanion/target/release/karospace-companion prepare ...` first
-when the `.h5ad`:
-- lacks a spatial neighbor graph (no `obsp['spatial_connectivities']`) and you want
-  neighbor/interaction tools → add `--delaunay --groupby <section-key>`;
-- needs a normalized layer or precomputed analytics baked in (`--persist-analytics-in-h5ad`).
+For spatial data this is the **default route, not an opt-in.** `karospace` never
+builds a spatial neighbor graph itself — it only *consumes* one from `obsp`; with
+no `obsp['spatial_connectivities']` the viewer silently loses every neighbor /
+enrichment / interaction / spatially-variable-feature tool. `--inspect-input`
+reports obs columns only (no `obsp`/`obsm`), so you can't tell whether a graph is
+already present — assume it is absent and build it. Run the companion **before**
+the export:
 
+```
+../KaroSpaceCompanion/target/release/karospace-companion prepare <input> \
+  --output <enriched.h5ad> --delaunay --groupby <section-key>
+```
+
+(same column as `--section-key`), then feed the enriched `.h5ad` to `karospace`.
 For large data prefer the fast paths the companion README documents:
 `--viewer-cluster-de-method t-test`, `--skip-viewer-interaction-markers`,
-`--viewer-analytics-columns <cols>`. Then feed the enriched `.h5ad` to `karospace`.
+`--viewer-analytics-columns <cols>` (the categorical columns you will display);
+neighbor-permutation z-scores auto-disable at ≥200k cells.
+
+**Fall back gracefully — never fail the whole job because the companion couldn't run:**
+- Binary missing (not built) → export directly from the original file and tell the
+  user the neighbor/interaction tools are absent until they build it
+  (`cargo build --release` in `KaroSpaceCompanion`, or set `KAROSPACE_COMPANION`).
+- Companion errors *"no spatial coordinates found …"* → its coordinate discovery is
+  fixed (`obsm/spatial`, `obsm/X_spatial`, or obs pairs `array_col`/`array_row`,
+  `pxl_col_in_fullres`/`pxl_row_in_fullres`, `x`/`y`; it has **no** `--spatial-x/-y`
+  flag). Export directly with `karospace`'s own `--spatial-x`/`--spatial-y` (§2) so
+  the viewer still gets coordinates, and note the graph was skipped.
+
+Skip the companion only on one of those fallbacks or when the user opts out.
 
 ### 6. Run, read errors, iterate
 

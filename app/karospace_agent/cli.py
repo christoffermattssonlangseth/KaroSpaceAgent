@@ -18,7 +18,7 @@ import threading
 from collections.abc import Callable
 
 from . import agent, auth
-from .commands import companion_bin, karospace_bin
+from .commands import companion_bin, companion_version, karospace_bin
 
 try:  # line editing + history at the `you>` prompt, where available
     import readline  # noqa: F401
@@ -46,8 +46,18 @@ def _preflight() -> list[str]:
         notes.append("karospace not found on PATH (set KAROSPACE_BIN) — required.")
     if companion_bin() is None:
         notes.append(
-            "karospace-companion not found — companion pre-processing unavailable "
+            "karospace-companion not found — spatial-graph pre-processing (the "
+            "default route) unavailable; viewers will build without neighbor tools "
             "(build ../KaroSpaceCompanion or set KAROSPACE_COMPANION)."
+        )
+    else:
+        ver = companion_version()
+        # karospace has no --version to compare against, so we can't diff the two;
+        # surfacing the companion version at least makes drift visible in the notes.
+        notes.append(
+            f"karospace-companion {ver} — spatial graph built by default."
+            if ver
+            else "karospace-companion present — spatial graph built by default."
         )
     return notes
 
@@ -276,11 +286,32 @@ def build_parser() -> argparse.ArgumentParser:
         default=agent.DEFAULT_MODEL,
         help=f"Model alias or id (default: {agent.DEFAULT_MODEL}).",
     )
+
+    a = sub.add_parser(
+        "app",
+        help="Open the chat in a native desktop window (the packaged-app face; "
+        "needs the 'app' extra: pip install 'karospace-agent[app]').",
+    )
+    a.add_argument("input", nargs="?", default=None, help="Optional file to build first.")
+    a.add_argument("intent", nargs="?", default="", help="Intent for the opening build.")
+    a.add_argument(
+        "--model",
+        default=agent.DEFAULT_MODEL,
+        help=f"Model alias or id (default: {agent.DEFAULT_MODEL}).",
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # A Finder-launched `.app` starts with a bare PATH, so tool lookups (and the
+    # SDK's own `claude` lookup) would fail even when everything is installed.
+    # Rehydrate from the login shell before any preflight. No-op in a terminal.
+    if args.command == "app":
+        from . import pathfix
+
+        pathfix.hydrate_path()
 
     if args.command == "auth":
         text, code = auth_report()
@@ -326,6 +357,22 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         try:
             web.serve(host=args.host, port=args.port, model=args.model, opening_message=first)
+        except KeyboardInterrupt:
+            return 130
+        return 0
+
+    if args.command == "app":
+        try:
+            from . import desktop
+        except ImportError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        first = _compose_prompt(args.input, args.intent) if args.input else None
+        try:
+            desktop.run_app(model=args.model, opening_message=first)
+        except (ImportError, RuntimeError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
         except KeyboardInterrupt:
             return 130
         return 0

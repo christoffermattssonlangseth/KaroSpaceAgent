@@ -487,10 +487,13 @@
     }
     function reset() { order.forEach((k) => set(k, null)); }
     function onTool(text) {
-      const m = /^(\w+)/.exec(text || "");
-      const stage = m && TOOL_STAGE[m[1]];
+      // Events arrive as "mcp__karospace__inspect_input(args…)"; take the tool
+      // name (last "__" segment before the args) and map it to a stage.
+      const raw = (text || "").split("(")[0].trim();
+      const name = raw.split("__").pop();
+      const stage = TOOL_STAGE[name];
       if (!stage) return;
-      if (m[1] === "inspect_input") reset();
+      if (name === "inspect_input") reset();
       const idx = order.indexOf(stage);
       order.forEach((k, j) => {
         if (j >= idx) return;

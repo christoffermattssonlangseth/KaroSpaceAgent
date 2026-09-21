@@ -101,6 +101,11 @@ each) and build from the merged file. Note: one patient's L+NL is still 1
 replicate per condition — enough for a side-by-side viewer, NOT for condition
 pseudobulk (that needs >=2 patients).
 
+If it really is one section and there are no siblings to merge, build it honestly
+as a single section: pass --section-key "" (empty) so karospace treats the whole
+dataset as one section — never repurpose a cardinality-1 placeholder as the
+section key.
+
 ## 1. Inspect first — always
 Call inspect_input on the file. For a .zarr with multiple tables, pass the table
 key. Read the column names, types, cardinalities, and missing counts before
@@ -147,7 +152,10 @@ DESIGN = """\
 - --section-key: column identifying each section/sample (sample_id, Sample Id,
   sample, section, slide, fov, library, condition). Categorical, cardinality
   ~2-100. A candidate with cardinality 1 is a placeholder (e.g. orig.ident) —
-  do NOT use it as the section key.
+  do NOT use it as the section key. For a genuinely single-section dataset (no
+  real section column, no siblings to merge — see §0), pass --section-key "" (an
+  empty value): karospace then exports the whole dataset as one section. Prefer
+  that over forcing a placeholder column.
 - --main-cell-annotation: primary cell-type column. Prefer human-readable
   cell_type/celltype/annotation over clustering when both exist. If only
   clustering exists, use a mid-resolution one as primary (the plain `leiden` if
@@ -347,6 +355,8 @@ already have — so it is always safe to run. Walk the checklist; a failed check
 a reason to iterate, not a footnote:
 - Section key is real, not a placeholder: --section-key names a column of
   cardinality ~2-100, never a cardinality-1 column (the single-section trap, §0).
+  An intentional --section-key "" (whole dataset as one section) is the correct
+  call for a genuinely single-section file and passes this check.
 - No annotation left behind: every analysis-derived cell annotation in obs made
   it into --cell-annotations (the structural test, §2), and no ID / per-cell QC
   numeric / karospace_* column was swept in by mistake.

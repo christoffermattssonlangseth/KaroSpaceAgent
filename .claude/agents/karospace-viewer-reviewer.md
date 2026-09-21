@@ -30,7 +30,8 @@ Go through each; for every one, state PASS, or FAIL with the concrete fix.
 1. **Section key is real, not a placeholder.** `--section-key` must name a
    categorical column of cardinality ~2–100. A cardinality-1 candidate (e.g.
    `orig.ident`) is the single-section trap — the build should have stopped, not
-   used it.
+   used it. An intentional empty `--section-key ""` (whole dataset as one section)
+   is the correct call for a genuinely single-section file and passes here.
 2. **No annotation left behind.** Every analysis-derived cell annotation in `obs`
    (clustering / cell-typing / spatial-domain families, or anything passing the
    structural test — categorical, cardinality ~2–300, not an experimental

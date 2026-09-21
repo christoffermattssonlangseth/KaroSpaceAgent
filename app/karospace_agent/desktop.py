@@ -20,11 +20,40 @@ from __future__ import annotations
 import socket
 import threading
 import time
+from importlib import resources
 
 from . import agent
 
 WINDOW_TITLE = "KaroSpace Agent"
 _STARTUP_TIMEOUT = 20.0  # seconds to wait for uvicorn before giving up
+
+
+def _load_icon_bytes() -> bytes:
+    """The packaged Dock/app-icon PNG, or b'' if it's somehow missing."""
+    try:
+        return resources.files(__package__).joinpath("static/appicon.png").read_bytes()
+    except Exception:  # pragma: no cover - only if package data is stripped
+        return b""
+
+
+def _set_macos_dock_icon(icon_bytes: bytes) -> None:
+    """Replace the generic Dock icon with our mark. Best-effort and macOS-only.
+
+    A pywebview app run from source (not a bundled .app) has no Info.plist icon,
+    so macOS shows a blank document in the Dock. AppKit lets us set it live from
+    the in-memory PNG. No-op (silently) on other platforms or without pyobjc."""
+    if not icon_bytes:
+        return
+    try:
+        from AppKit import NSApplication, NSImage
+        from Foundation import NSData
+
+        data = NSData.dataWithBytes_length_(icon_bytes, len(icon_bytes))
+        image = NSImage.alloc().initWithData_(data)
+        if image is not None:
+            NSApplication.sharedApplication().setApplicationIconImage_(image)
+    except Exception:  # pragma: no cover - non-macOS or pyobjc absent
+        pass
 
 
 def _free_port(host: str = "127.0.0.1") -> int:
@@ -75,8 +104,11 @@ def run_app(
         time.sleep(0.05)
 
     webview.create_window(title, url=f"http://{host}:{port}/", width=1100, height=780)
+    icon_bytes = _load_icon_bytes()
     try:
-        webview.start()  # blocks on the main thread until the window closes
+        # webview.start(func) runs func once the GUI loop is up — the point at
+        # which the NSApplication exists and the Dock icon can be replaced.
+        webview.start(lambda: _set_macos_dock_icon(icon_bytes))
     finally:
         server.should_exit = True
         thread.join(timeout=5)

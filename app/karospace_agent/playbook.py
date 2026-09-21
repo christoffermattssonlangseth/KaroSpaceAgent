@@ -36,7 +36,7 @@ runs locally through the tools."""
 # --- Toolbox: the same tools, grouped by the stage that uses them ----------
 #
 # A flat list makes the model hunt; grouping by pipeline stage puts the right
-# tool next to the step that calls for it. At ten tools this orientation is all
+# tool next to the step that calls for it. At this size this orientation is all
 # the "retrieval" that is warranted — the whole set fits in view, so grouping,
 # not embedding-ranked lookup, is the honest right-sized design.
 
@@ -48,11 +48,16 @@ for it.
 
 Acquire  — geo_manifest      list a GEO accession's samples/files/platform (public metadata).
            geo_build         download only the matrix members of chosen samples -> local .h5ad.
+           geo_fetch_file    download ONE supplementary file geo_build skips (e.g. an analyzed *_object.rds) to disk.
+           rds_inspect       schema of an R .rds/.RData object (Seurat/SCE): assays, layers, embeddings, has_spatial.
+           rds_convert       convert an .rds/.RData -> .h5ad (R backend) to keep the authors' annotations/embeddings.
 Inspect  — inspect_input     sanitized obs/feature metadata for a file. ALWAYS call first.
            inspect_structure X dtype + is-integer, layers, obsm, obsp (graph present?).
            cli_help          verify a flag exists before using it. Never invent flags.
-Enrich   — merge_sections    merge per-section files that lack sample metadata.
-           run_companion      pre-process (spatial graph / analytics) before export.
+Prepare  — run_preprocess    add a leiden clustering when a raw file has no annotations (writes obs['leiden']).
+           generate_notebook  hand off heavier prep (CellCharter spatial domains) as a notebook the researcher runs.
+           merge_sections    merge per-section files that lack sample metadata.
+Enrich   — run_companion      pre-process (spatial graph / analytics) before export.
 Export   — run_export        run the export; read its exit code + errors and iterate.
 Deliver  — package_sidecar   turn a sidecar viewer into a single-file .karospace.
            validate_output   confirm artifacts actually wrote (metadata only)."""
@@ -75,12 +80,51 @@ path, turn it into a local .h5ad first:
   path. Supported platforms: xenium, visium, merscope. It pulls only the matrix
   members (for Xenium, out of the multi-GB outs.zip via range requests — never
   the transcripts table or images) and writes raw counts in X + coordinates in
-  obsm['spatial']. For an unsupported platform or an unfamiliar file layout it
-  fails LOUDLY, naming what it found — relay that to the user rather than
-  retrying blindly (they may need to supply the file another way).
+  obsm['spatial']. It handles BOTH Xenium layouts automatically: the outs.zip
+  bundle, and records that post the files loose (individual
+  *_cell_feature_matrix.h5 + *_cells*.csv/parquet) instead — in that case it just
+  downloads the two small flat files directly. So do NOT tell the user a flat /
+  no-outs.zip layout needs a manual download; call geo_build, it assembles them.
+  For an unsupported platform or a genuinely unfamiliar layout it fails LOUDLY,
+  naming what it found — relay that rather than retrying blindly.
 - Then treat the written .h5ad as the input and continue from §0 below. A
-  fresh geo_build file has raw-counts X and no spatial graph, so §5 (companion)
-  and §3 (LogNormalize / counts layer) apply as usual."""
+  fresh geo_build file has raw-counts X, no spatial graph, and NO obs annotations
+  (no cell_type / cluster columns) — so §1b (run_preprocess to create obs['leiden']),
+  §5 (companion) and §3 (LogNormalize / counts layer) all apply as usual.
+- WATCH the manifest for an analyzed object among the supplementary files — an
+  R .rds/.RData (e.g. a Xenium '*_final_*_object.rds'), which typically holds the
+  authors' curated cell types + embeddings that the raw matrix lacks. geo_build
+  does NOT pull it. When both a raw matrix and such an .rds exist, that is the §0b
+  decision below — surface it to the user, don't silently pick. If the .rds is
+  the chosen path, download it YOURSELF with geo_fetch_file (accession, gsm, and a
+  filename substring like '.rds' from the manifest) — NEVER tell the user to fetch
+  it manually from GEO. The file streams to local disk; only the log crosses.
+
+## 0b. Convert an R .rds / .RData object (Seurat / SingleCellExperiment)
+KaroSpace ingests .h5ad, not .rds. When the input is an R object — a file the
+user hands you directly, or an analyzed object sitting alongside a GEO sample's
+raw matrix — convert it first with the rds2h5ad R backend:
+- If the .rds lives on GEO (not already on local disk), fetch it yourself first
+  with geo_fetch_file (accession, gsm, filename substring, an output dir). Do NOT
+  ask the user to download it — you have the tool. Then use the returned local
+  path as the input to rds_inspect / rds_convert.
+- Call rds_inspect to read its schema (object type, available assays, layer and
+  reduced-dim NAMES, cell/gene counts, has_spatial). No values cross — same
+  boundary as inspect_input. Use it to see whether the object actually carries
+  annotations/embeddings worth keeping, and which --assay to export.
+- When a dataset offers BOTH a raw matrix (leiden from scratch, light, no R) AND
+  an analyzed .rds (the authors' real cell types + UMAP + coordinates, but a
+  larger download and an R conversion): do NOT choose silently. Lay out the two
+  paths and their trade-off and let the user pick per-dataset. One-shot with no
+  user to ask: default to the raw matrix + §1b (the lighter, dependency-free
+  path) and say so, noting the .rds alternative.
+- If they choose the .rds, call rds_convert (pick the assay from rds_inspect;
+  keep embeddings and spatial unless told otherwise) to write a .h5ad, then treat
+  that as the input and continue from §0. Such a file usually already carries
+  annotations, so §1b is skipped — but still run §5 (companion) and set §3
+  normalization from the structure probe as usual.
+- rds2h5ad needs R + zellkonverter locally; if it's missing the tool says so —
+  relay that and fall back to the raw-matrix path rather than failing the job."""
 
 # --- Stage: Inspect (single-section trap + read the schema) ----------------
 
@@ -98,6 +142,11 @@ each) and build from the merged file. Note: one patient's L+NL is still 1
 replicate per condition — enough for a side-by-side viewer, NOT for condition
 pseudobulk (that needs >=2 patients).
 
+If it really is one section and there are no siblings to merge, build it honestly
+as a single section: pass --section-key "" (empty) so karospace treats the whole
+dataset as one section — never repurpose a cardinality-1 placeholder as the
+section key.
+
 ## 1. Inspect first — always
 Call inspect_input on the file. For a .zarr with multiple tables, pass the table
 key. Read the column names, types, cardinalities, and missing counts before
@@ -109,7 +158,33 @@ obsm, and obsp; inspect_structure fills that gap with schema/aggregates only (X
 dtype + all_integer, layer names+dtypes, obsm keys+cols, obsp keys, and a
 spatial_graph_present flag). Two decisions depend on it: whether a spatial
 neighbor graph already exists (§5) and how X is normalized (§3). Still no cell
-values cross — reason from structure alone."""
+values cross — reason from structure alone.
+
+## 1b. Prepare an un-annotated matrix — cluster it first
+If inspect_input shows NO analysis-derived annotation at all — no cell_type /
+celltype / annotation column and no clustering (leiden/louvain/…) — the file
+carries only raw counts and coordinates (a fresh geo_build file is the usual
+case). A viewer built from it could be coloured gene-by-gene only, with nothing
+for --main-cell-annotation. Create a clustering first: call run_preprocess on the
+file (it runs scanpy normalize → log1p → HVG → PCA → neighbors → leiden LOCALLY),
+which writes obs['leiden'], a raw layers['counts'], and a log1p
+layers['normalized']. Use the leiden column as --main-cell-annotation in §2 and
+point display normalization at layers['normalized'] in §3. Resolution is a
+scientific choice, not a fact: run_preprocess uses a default (1.0) and reports the
+cluster count — if the user wants finer/coarser structure, re-run at a different
+resolution rather than treating the first pass as ground truth. Skip this step
+entirely when the file already carries annotations (most researcher-supplied
+files do).
+
+For deeper spatial-domain detection (CellCharter) or when the researcher wants to
+own the clustering, use generate_notebook instead of run_preprocess: it writes a
+parameterized notebook (normalize → leiden → CellCharter → annotated .h5ad) they
+run on their own machine/GPU. That is a HANDOFF — the heavy compute and the
+biological choice of domain count stay with the researcher, and you cannot
+continue the build in this session. After writing the notebook, tell the user to
+run it and come back with the annotated file; then resume from §0. Choose
+run_preprocess for "just make me a viewer", generate_notebook for "I want to run
+CellCharter / own the analysis"."""
 
 # --- Stage: Design (core flags + statistics/normalization) -----------------
 
@@ -118,7 +193,10 @@ DESIGN = """\
 - --section-key: column identifying each section/sample (sample_id, Sample Id,
   sample, section, slide, fov, library, condition). Categorical, cardinality
   ~2-100. A candidate with cardinality 1 is a placeholder (e.g. orig.ident) —
-  do NOT use it as the section key.
+  do NOT use it as the section key. For a genuinely single-section dataset (no
+  real section column, no siblings to merge — see §0), pass --section-key "" (an
+  empty value): karospace then exports the whole dataset as one section. Prefer
+  that over forcing a placeholder column.
 - --main-cell-annotation: primary cell-type column. Prefer human-readable
   cell_type/celltype/annotation over clustering when both exist. If only
   clustering exists, use a mid-resolution one as primary (the plain `leiden` if
@@ -318,6 +396,8 @@ already have — so it is always safe to run. Walk the checklist; a failed check
 a reason to iterate, not a footnote:
 - Section key is real, not a placeholder: --section-key names a column of
   cardinality ~2-100, never a cardinality-1 column (the single-section trap, §0).
+  An intentional --section-key "" (whole dataset as one section) is the correct
+  call for a genuinely single-section file and passes this check.
 - No annotation left behind: every analysis-derived cell annotation in obs made
   it into --cell-annotations (the structural test, §2), and no ID / per-cell QC
   numeric / karospace_* column was swept in by mistake.

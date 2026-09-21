@@ -29,6 +29,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MERGE_SCRIPT = REPO_ROOT / "scripts" / "merge_sections.py"
 STRUCTURE_SCRIPT = REPO_ROOT / "scripts" / "inspect_structure.py"
 GEO_SCRIPT = REPO_ROOT / "scripts" / "geo_fetch.py"
+PREPROCESS_SCRIPT = REPO_ROOT / "scripts" / "preprocess.py"
+GEN_NOTEBOOK_SCRIPT = REPO_ROOT / "scripts" / "gen_notebook.py"
 
 # Default timeout for a full export (analytics + DE + pathway can be minutes on
 # large data). Override with KAROSPACE_AGENT_TIMEOUT (seconds).
@@ -50,6 +52,16 @@ class RunResult:
 def karospace_bin() -> str | None:
     """`karospace` from PATH, or KAROSPACE_BIN if set."""
     return os.environ.get("KAROSPACE_BIN") or shutil.which("karospace")
+
+
+def rds2h5ad_bin() -> str | None:
+    """`rds2h5ad` from PATH, or RDS2H5AD_BIN if set.
+
+    The R-backed .rds -> .h5ad converter (separate `pip install rdstoh5ad`, which
+    also needs Rscript + zellkonverter). Like `karospace`, it's a standalone CLI on
+    PATH, not run through the scientific python — R owns the deserialization.
+    """
+    return os.environ.get("RDS2H5AD_BIN") or shutil.which("rds2h5ad")
 
 
 def companion_bin() -> str | None:
@@ -455,6 +467,153 @@ def run_geo_build(
         argv.append("--include-control-features")
     if cache_dir:
         argv += ["--cache-dir", cache_dir]
+    return run(argv, timeout=timeout)
+
+
+def run_geo_fetch_file(
+    accession: str,
+    gsm: str,
+    match: str,
+    output_dir: str,
+    gunzip: bool = False,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run scripts/geo_fetch.py fetch — download ONE supplementary file to disk.
+
+    For the files `geo_build` skips — above all an analyzed `*_object.rds` that
+    carries the authors' curated cell types + embeddings — so the agent can pull
+    it itself and convert it, instead of punting the download to the user. Bytes
+    go to local disk only; no data value crosses the boundary. Long-running
+    (streams a large file), so it tees progress to the console like build/export.
+    """
+    if not GEO_SCRIPT.exists():
+        return RunResult(127, "", f"geo script missing: {GEO_SCRIPT}")
+    argv = [merge_python(), str(GEO_SCRIPT), "fetch", accession,
+            "--gsm", gsm, "--match", match, "-o", output_dir]
+    if gunzip:
+        argv.append("--gunzip")
+    return run(argv, timeout=timeout)
+
+
+def run_preprocess(
+    input_path: str,
+    output: str,
+    method: str = "leiden",
+    resolution: float = 1.0,
+    n_neighbors: int = 15,
+    n_pcs: int = 50,
+    n_hvg: int = 2000,
+    key: str = "leiden",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run scripts/preprocess.py — add a leiden clustering to a raw .h5ad.
+
+    Uses the karospace scientific interpreter (needs scanpy/leidenalg). Long
+    enough to stream progress like an export; the model still receives only the
+    captured, truncated aggregate log (cluster count + sizes, key names).
+    """
+    if not PREPROCESS_SCRIPT.exists():
+        return RunResult(127, "", f"preprocess script missing: {PREPROCESS_SCRIPT}")
+    argv = [
+        merge_python(), str(PREPROCESS_SCRIPT), input_path, "-o", output,
+        "--method", method,
+        "--resolution", str(resolution),
+        "--n-neighbors", str(n_neighbors),
+        "--n-pcs", str(n_pcs),
+        "--n-hvg", str(n_hvg),
+        "--key", key,
+    ]
+    return run(argv, timeout=timeout)
+
+
+def run_gen_notebook(
+    input_path: str,
+    output: str,
+    section_key: str = "",
+    resolution: float = 1.0,
+    genes: list[str] | None = None,
+    organism: str = "Human",
+    include_cellcharter: bool = True,
+    timeout: int = 120,
+) -> RunResult:
+    """Run scripts/gen_notebook.py — write a preprocessing notebook.
+
+    Pure templating from schema-level params (it reads no data), so it is quick
+    and safe; runs under the shared interpreter for consistency with the other
+    scripts. The model receives only the 'wrote notebook: …' summary line.
+    """
+    if not GEN_NOTEBOOK_SCRIPT.exists():
+        return RunResult(127, "", f"notebook script missing: {GEN_NOTEBOOK_SCRIPT}")
+    argv = [
+        merge_python(), str(GEN_NOTEBOOK_SCRIPT), input_path, "-o", output,
+        "--section-key", section_key,
+        "--resolution", str(resolution),
+        "--genes", ",".join(genes or []),
+        "--organism", organism,
+    ]
+    if not include_cellcharter:
+        argv.append("--no-cellcharter")
+    return run(argv, timeout=timeout)
+
+
+def run_rds_inspect(input_path: str, assay: str = "", timeout: int = 600) -> RunResult:
+    """Run `rds2h5ad inspect` — schema-only probe of an .rds/.RData object.
+
+    Emits machine-readable JSON of NAMES and COUNTS only: object type, selected +
+    available assays, layer names, reduced-dim (embedding) names, cell/gene counts,
+    and a has_spatial boolean — no data values, so like inspect_structure it needs
+    no example stripping. Reading a large R object is not instant; `stream=False`
+    keeps it off the console for parity with the other inspection probes.
+    """
+    binp = rds2h5ad_bin()
+    if binp is None:
+        return RunResult(
+            127, "",
+            "rds2h5ad not found on PATH. Install it (pip install rdstoh5ad; needs "
+            "Rscript + zellkonverter) or set RDS2H5AD_BIN.",
+        )
+    argv = [binp, "inspect", input_path]
+    if assay:
+        argv += ["--assay", assay]
+    return run(argv, timeout=timeout, stream=False)
+
+
+def run_rds_convert(
+    input_path: str,
+    output: str,
+    assay: str = "",
+    x_layer: str = "",
+    layers: list[str] | None = None,
+    reduced_dims: list[str] | None = None,
+    no_spatial: bool = False,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run `rds2h5ad convert` — R-backed .rds/.RData -> .h5ad, written locally.
+
+    Long-running on large objects (a Xenium `_final_xenium_object.rds` can be
+    hundreds of MB), so it streams progress to the console like an export. The R
+    backend keeps sparse matrices sparse and lets zellkonverter own the .h5ad
+    layout. The model receives only the captured, truncated summary (paths + the
+    schema of what was written).
+    """
+    binp = rds2h5ad_bin()
+    if binp is None:
+        return RunResult(
+            127, "",
+            "rds2h5ad not found on PATH. Install it (pip install rdstoh5ad; needs "
+            "Rscript + zellkonverter) or set RDS2H5AD_BIN.",
+        )
+    argv = [binp, "convert", input_path, output]
+    if assay:
+        argv += ["--assay", assay]
+    if x_layer:
+        argv += ["--x-layer", x_layer]
+    if layers:
+        argv += ["--layers", ",".join(layers)]
+    if reduced_dims:
+        argv += ["--reduced-dims", ",".join(reduced_dims)]
+    if no_spatial:
+        argv.append("--no-spatial")
     return run(argv, timeout=timeout)
 
 

@@ -59,12 +59,20 @@ def test_run_app_serves_then_opens_and_stops_window(monkeypatch):
         created["title"] = title
         created["url"] = url
 
-    def fake_start():
+    def fake_start(func=None):
         # Window is "open"; closing it returns control (real webview.start does
-        # the same). By now the server must be started.
+        # the same). By now the server must be started. Real webview.start runs
+        # the on-start callback once the GUI loop is up — mirror that.
         assert created, "window opened before create_window"
+        if func is not None:
+            func()
 
     fake_webview = types.SimpleNamespace(create_window=fake_create_window, start=fake_start)
+
+    # Record that the Dock icon gets set (with real PNG bytes) without needing a
+    # live NSApplication in the test process.
+    icon_calls = []
+    monkeypatch.setattr(desktop, "_set_macos_dock_icon", lambda b: icon_calls.append(b))
 
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
@@ -73,3 +81,4 @@ def test_run_app_serves_then_opens_and_stops_window(monkeypatch):
 
     assert created["title"] == "KaroSpace Agent"
     assert created["url"].startswith("http://127.0.0.1:")
+    assert icon_calls and icon_calls[0][:8] == b"\x89PNG\r\n\x1a\n"

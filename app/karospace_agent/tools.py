@@ -174,7 +174,192 @@ async def geo_build(args: dict[str, Any]) -> dict[str, Any]:
     return _report(rr, f"geo_fetch.py build {accession} --platform {platform}")
 
 
+@tool(
+    "geo_fetch_file",
+    "Download ONE supplementary file from a GEO sample straight to local disk — "
+    "the files geo_build deliberately skips. Its main use: pull an analyzed "
+    "'*_object.rds' (a Xenium/Seurat/SingleCellExperiment object carrying the "
+    "authors' curated cell types + embeddings + coordinates) so you can convert "
+    "it with rds_inspect/rds_convert, instead of asking the user to download it "
+    "or throwing the analysis away and re-clustering the raw matrix. Match the "
+    "file by a substring of its FILENAME (from geo_manifest), e.g. '.rds' or "
+    "'final_xenium_object'; the pattern must select exactly one file or it errors "
+    "with the candidates. Downloads bytes to local disk only — nothing but the "
+    "aggregate log crosses the boundary. Returns the local path; then call "
+    "rds_inspect on it (for an .rds) or inspect_input / inspect_structure.",
+    {
+        "accession": Annotated[str, "GEO accession the sample belongs to (GSE or GSM)."],
+        "gsm": Annotated[str, "The sample (GSMxxxxx) whose file to download."],
+        "match": Annotated[
+            str, "Filename substring selecting exactly one file, e.g. '.rds'."
+        ],
+        "output_dir": Annotated[str, "Local directory to download the file into."],
+        "gunzip": Annotated[
+            bool, "Decompress a .gz payload after download. Default false (an .rds is not gzipped)."
+        ],
+    },
+)
+async def geo_fetch_file(args: dict[str, Any]) -> dict[str, Any]:
+    accession = str(args["accession"]).strip()
+    gsm = str(args["gsm"]).strip()
+    match = str(args["match"]).strip()
+    rr = commands.run_geo_fetch_file(
+        accession,
+        gsm,
+        match,
+        str(args["output_dir"]),
+        gunzip=bool(args.get("gunzip", False)),
+    )
+    return _report(rr, f"geo_fetch.py fetch {accession} --gsm {gsm} --match {match}")
+
+
+@tool(
+    "rds_inspect",
+    "Inspect an R .rds / .RData object (a Seurat, SingleCellExperiment, or "
+    "SpatialExperiment) and return the SCHEMA only, via the rds2h5ad R backend. "
+    "Emits names and counts: object type, the selected + available assays, layer "
+    "names, reduced-dim (embedding) names, cell and gene counts, and a has_spatial "
+    "flag — NO data values, so it needs no example stripping. Use this to decide "
+    "whether an analyzed .rds is worth converting (e.g. a GEO Xenium "
+    "'*_final_*_object.rds' usually carries the authors' curated cell-type "
+    "annotations + UMAP + coordinates that the raw matrix lacks) and which --assay "
+    "to convert. Requires rds2h5ad on PATH (R + zellkonverter).",
+    {
+        "input_path": Annotated[str, "Path to the .rds or .RData file."],
+        "assay": Annotated[
+            str, "Assay to inspect. '' lets the backend choose a default."
+        ],
+    },
+)
+async def rds_inspect(args: dict[str, Any]) -> dict[str, Any]:
+    assay = (args.get("assay") or "").strip()
+    rr = commands.run_rds_inspect(str(args["input_path"]), assay=assay)
+    return _report(rr, f"rds2h5ad inspect {args['input_path']}")
+
+
+@tool(
+    "rds_convert",
+    "Convert an R .rds / .RData object to a KaroSpace-ingestible .h5ad, via the "
+    "rds2h5ad R backend (R owns the Seurat/SingleCellExperiment deserialization; "
+    "zellkonverter writes the .h5ad; sparse matrices stay sparse). Use this when "
+    "the analyzed object carries annotations/embeddings the raw matrix doesn't — "
+    "e.g. prefer a GEO sample's '*_final_*_object.rds' over the bare "
+    "cell_feature_matrix when the goal is the authors' published cell types rather "
+    "than a fresh leiden. Call rds_inspect first to choose the assay. The heavy "
+    "read + write runs LOCALLY; the model receives only the summary (paths + the "
+    "schema of what was written). After it finishes, run inspect_input / "
+    "inspect_structure on the output and continue the normal build. It can be slow "
+    "on large objects (hundreds of MB).",
+    {
+        "input_path": Annotated[str, "Path to the input .rds / .RData."],
+        "output": Annotated[str, "Output .h5ad path."],
+        "assay": Annotated[
+            str, "Assay to export (e.g. 'RNA', 'SCT'). '' = backend default."
+        ],
+        "x_layer": Annotated[
+            str, "Layer/assay to map to AnnData X (e.g. 'counts', 'data'). '' = default."
+        ],
+        "reduced_dims": Annotated[
+            list, "Embeddings to export (e.g. ['pca','umap']). Empty = all available."
+        ],
+        "no_spatial": Annotated[
+            bool, "Skip inferred spatial coordinates in obsm. Default false (keep them)."
+        ],
+    },
+)
+async def rds_convert(args: dict[str, Any]) -> dict[str, Any]:
+    reduced = [str(r).strip() for r in args.get("reduced_dims", []) if str(r).strip()]
+    rr = commands.run_rds_convert(
+        str(args["input_path"]),
+        str(args["output"]),
+        assay=(args.get("assay") or "").strip(),
+        x_layer=(args.get("x_layer") or "").strip(),
+        reduced_dims=reduced,
+        no_spatial=bool(args.get("no_spatial", False)),
+    )
+    return _report(rr, f"rds2h5ad convert {args['input_path']} -> {args['output']}")
+
+
 # --- Pre-processing -------------------------------------------------------
+
+@tool(
+    "run_preprocess",
+    "Add a transcriptomic clustering to a RAW matrix so it becomes ingestible. A "
+    "freshly acquired file (e.g. from geo_build) has raw counts + coordinates but "
+    "NO cell-type / cluster columns in obs — so a viewer can only be coloured "
+    "gene-by-gene. This runs the standard scanpy path (normalize -> log1p -> HVG "
+    "-> PCA -> neighbors -> leiden) LOCALLY, writing layers['counts'] (raw, "
+    "preserved), layers['normalized'] (log1p, colour from this), and obs['leiden'] "
+    "(feeds --main-cell-annotation / --cell-annotations). Call it when inspect "
+    "shows no analysis-derived annotation column. Returns an aggregate log only "
+    "(cluster count + per-cluster sizes, key names) — no per-cell labels or "
+    "values. Resolution is a scientific choice: the default is a starting point; "
+    "re-run with a different resolution if the user wants finer/coarser clusters. "
+    "Heavier spatial-domain methods (CellCharter) are out of scope here — those "
+    "belong in a generated notebook the researcher runs.",
+    {
+        "input_path": Annotated[str, "Input .h5ad with raw counts in X."],
+        "output": Annotated[str, "Output .h5ad path (clustered)."],
+        "resolution": Annotated[
+            float, "Leiden resolution; higher = more clusters. Default 1.0."
+        ],
+        "key": Annotated[str, "obs column name for the clustering. Default 'leiden'."],
+    },
+)
+async def run_preprocess(args: dict[str, Any]) -> dict[str, Any]:
+    resolution = float(args.get("resolution") or 1.0)
+    key = (args.get("key") or "leiden").strip() or "leiden"
+    rr = commands.run_preprocess(
+        str(args["input_path"]),
+        str(args["output"]),
+        resolution=resolution,
+        key=key,
+    )
+    return _report(rr, f"preprocess.py {args['input_path']} --resolution {resolution}")
+
+
+@tool(
+    "generate_notebook",
+    "Write a parameterized preprocessing NOTEBOOK the researcher runs themselves, "
+    "instead of clustering in-agent. Use this when the analysis is too heavy or "
+    "too scientific to run headless — chiefly CellCharter spatial-domain detection "
+    "(scvi-tools + torch, and a real choice of how many domains) — or when the "
+    "researcher wants to own the clustering. The notebook is templated from "
+    "schema-level params only (paths, the section-key column NAME, gene names, "
+    "numbers); it reads no data, so nothing crosses the boundary. It contains "
+    "normalize → leiden → (CellCharter spatial domains) → write annotated .h5ad, "
+    "and ends with the exact karospace-agent build command to feed the result "
+    "back. This is a HANDOFF: after writing it you cannot continue the build in "
+    "this session — tell the user to run it and return with the annotated file. "
+    "For the light, in-agent path (leiden only, no heavy deps) use run_preprocess "
+    "instead.",
+    {
+        "input_path": Annotated[str, "Raw .h5ad the notebook will load."],
+        "output": Annotated[str, "Notebook .ipynb path to write."],
+        "section_key": Annotated[
+            str, "obs column separating sections/samples (batch/library). '' if single section."
+        ],
+        "resolution": Annotated[float, "Leiden resolution. Default 1.0."],
+        "genes": Annotated[list, "Genes of interest to note (informational). May be empty."],
+        "organism": Annotated[str, "'Human' or 'Mouse'."],
+        "include_cellcharter": Annotated[
+            bool, "Include the CellCharter spatial-domain cells. Default true."
+        ],
+    },
+)
+async def generate_notebook(args: dict[str, Any]) -> dict[str, Any]:
+    genes = [str(g).strip() for g in args.get("genes", []) if str(g).strip()]
+    rr = commands.run_gen_notebook(
+        str(args["input_path"]),
+        str(args["output"]),
+        section_key=(args.get("section_key") or "").strip(),
+        resolution=float(args.get("resolution") or 1.0),
+        genes=genes,
+        organism=(args.get("organism") or "Human").strip() or "Human",
+        include_cellcharter=bool(args.get("include_cellcharter", True)),
+    )
+    return _report(rr, f"gen_notebook.py {args['input_path']} -> {args['output']}")
+
 
 @tool(
     "merge_sections",
@@ -276,6 +461,11 @@ ALL_TOOLS = [
     cli_help,
     geo_manifest,
     geo_build,
+    geo_fetch_file,
+    rds_inspect,
+    rds_convert,
+    run_preprocess,
+    generate_notebook,
     merge_sections,
     run_companion,
     run_export,

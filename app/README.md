@@ -8,7 +8,7 @@ code:
 
 - **local hands** — every side effect is a subprocess wrapper (`commands.py`);
 - **Claude brain** — the model only reasons and chooses flags (`prompt.py`);
-- **schema only** — the model's *entire* capability surface is the seven
+- **schema only** — the model's *entire* capability surface is the handful of
   sanitizing tools in `tools.py`, and **all built-in tools are disabled**
   (`ClaudeAgentOptions(tools=[])`). The model literally cannot read a file off
   disk — it sees column names, dtypes, cardinalities, missing/aggregate counts,
@@ -25,7 +25,10 @@ pip install -e .          # pulls claude-agent-sdk
 
 Requires `karospace` on PATH. The Rust companion is optional; the app finds it at
 `../../KaroSpaceCompanion/target/release/karospace-companion` or via
-`KAROSPACE_COMPANION`.
+`KAROSPACE_COMPANION`. For `.rds` inputs (Seurat / SingleCellExperiment), the
+optional [`rds2h5ad`](https://github.com/christoffermattssonlangseth/RDStoH5AD)
+converter is used if present — `pip install rdstoh5ad` (needs R with
+`zellkonverter`), found on PATH or via `RDS2H5AD_BIN`.
 
 Then `karospace-agent auth` — it reports which Claude credential the model will
 run under (a Console sign-in via `claude` `/login`, an API key, federation, or a
@@ -57,8 +60,8 @@ karospace-agent chat
 Type `/quit` (or Ctrl-D) to leave; Ctrl-C mid-turn interrupts the model and
 returns to the prompt (a second Ctrl-C quits). `chat` uses the SDK's `ClaudeSDKClient`
 (one session, context kept across turns) with the *same* options as `build`:
-built-ins off, the seven tools, and a short conversation addendum to the system
-prompt. Anything you type goes to the model verbatim, so give paths and column
+built-ins off, the same sanitizing tools, and a short conversation addendum to the
+system prompt. Anything you type goes to the model verbatim, so give paths and column
 names, not values.
 
 ### Browser mode
@@ -81,13 +84,14 @@ default and no auth: it is a local app with a browser window, not a service.
 | --- | --- |
 | `commands.py` | Subprocess wrappers; locates `karospace` / companion / merge script. No model contact. |
 | `sanitize.py` | The boundary: output truncation + path *stat* (never file bytes). |
-| `tools.py` | The seven `@tool` local hands, each returning sanitized text. |
+| `tools.py` | The `@tool` local hands (inspect / acquire / .rds convert / prepare / enrich / export / deliver), each returning sanitized text. |
 | `prompt.py` | System prompt — the viewer-building playbook, ported to the tools. |
 | `agent.py` | Builds `ClaudeAgentOptions` (built-ins off); `run()` for one-shot builds, `Session` for multi-turn chat. |
 | `auth.py` | Detects which credential the CLI subprocess will use and whether it is permitted; no secret is read. |
 | `cli.py` | `karospace-agent build <input> "<intent>"`, `karospace-agent chat [input] ["<intent>"]` (the REPL), `karospace-agent web`, and `karospace-agent auth`. |
 | `web.py` | The browser front end: Starlette app, SSE event hub, one-turn-at-a-time worker (optional `[web]` extra). |
-| `static/index.html` | The single-file page `web.py` serves. |
+| `static/index.html` | The single-file page `web.py` serves (inline SVG logo + favicon). |
+| `static/appicon.png` | The Dock/app icon `desktop.py` sets at runtime for `karospace-agent app`. |
 
 ## Config
 

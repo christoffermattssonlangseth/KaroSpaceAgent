@@ -4,14 +4,16 @@ Agent tooling that navigates the creation of **KaroSpace** spatial-transcriptomi
 viewers from raw data. This repo holds the agent config (skills + subagents); it
 does not contain the viewer or the pipeline code.
 
-## The two tools this agent drives
+## The tools this agent drives
 
 | Tool | Lang | Location | Role |
 | --- | --- | --- | --- |
 | `karospace` | Python | on PATH (`karospace --help`) | Exports an `.h5ad` / SpatialData `.zarr` → standalone HTML viewer |
 | `karospace-companion` | Rust | `../KaroSpaceCompanion/target/release/karospace-companion` | Pre-processes an `.h5ad`: spatial graph, normalization, analytics, viewer JSON |
+| `rds2h5ad` | Python + R | on PATH (`rds2h5ad --help`), optional | Converts an R `.rds`/`.RData` (Seurat / SingleCellExperiment) → `.h5ad` so R-object inputs are ingestible; needs R + `zellkonverter` |
 
-Source repos: `../KaroSpace` and `../KaroSpaceCompanion`. Read their `README.md`
+Source repos: `../KaroSpace`, `../KaroSpaceCompanion`, and
+`../RDStoH5AD`. Read their `README.md`
 for the full flag surface — both are large and change over time; never assume a
 flag exists, check `--help`.
 

@@ -1,6 +1,6 @@
 ---
 name: build-karospace-viewer
-description: Build a KaroSpace HTML viewer from a raw .h5ad / SpatialData .zarr. Use when the user wants to create, generate, or export a KaroSpace spatial-transcriptomics viewer, or hands you a spatial dataset and asks to visualize it. Inspects the data, chooses correct export flags, optionally runs the companion pre-processor, runs the export, and validates the result.
+description: Build a KaroSpace HTML viewer from a raw .h5ad / SpatialData .zarr, an R .rds/.RData object (Seurat / SingleCellExperiment), or a GEO accession. Use when the user wants to create, generate, or export a KaroSpace spatial-transcriptomics viewer, hands you a spatial dataset, or gives a GEO accession to visualize. Can acquire data from GEO, convert an .rds to .h5ad (rds2h5ad), cluster an un-annotated matrix (leiden) or hand off heavier prep (CellCharter) as a notebook, inspects the data, chooses correct export flags, optionally runs the companion pre-processor, runs the export, and validates the result.
 ---
 
 # Build a KaroSpace viewer
@@ -24,6 +24,92 @@ is piped through a strip step — always run it that way, never the raw form.
 Reason from names, types, and cardinalities alone. All compute runs locally.
 
 ## Workflow
+
+### 0a. Acquire from GEO (when the input is an accession, not a file)
+
+If the user gives a GEO accession (`GSExxxxx` / `GSMxxxxx`) or a GEO URL instead
+of a path, turn it into a local `.h5ad` first. List what the series holds — public
+catalogue metadata only, no data values:
+
+```bash
+python scripts/geo_fetch.py manifest GSE243168
+```
+
+It prints each sample's title, organism, instrument, inferred platform
+(xenium / visium / visium_hd / chromium / …), and every supplementary FILENAME +
+size. Pick the sample(s) and platform — many series are multi-platform or
+multi-section, so **don't assume**; confirm with the user which platform / GSM(s)
+they want. Then build, pulling only the matrix members (for Xenium, out of the
+multi-GB `outs.zip` via range requests — never the transcripts table or images):
+
+```bash
+python scripts/geo_fetch.py build GSE243168 \
+  --platform xenium --gsm GSM7782698 -o /path/GSE243168_xenium.h5ad
+```
+
+Supported platforms: `xenium`, `visium`, `merscope`. For Xenium it handles **both
+layouts automatically**: the `_outs.zip` bundle (range-pulls two members) and
+records that post the files **loose** (individual `*_cell_feature_matrix.h5` +
+`*_cells*.csv/parquet`, no outs.zip) — it downloads the two small flat files
+directly. So don't tell the user a flat / no-outs.zip layout needs a manual
+download; just call `geo_build`. A genuinely unsupported platform or unfamiliar
+layout fails **loudly**, naming what it found — relay that rather than retrying
+blindly. The download and assembly run locally; only catalogue metadata crosses.
+A fresh build has raw-counts X, no spatial graph, and often **no obs
+annotations** — so §1b (cluster it, if none exist) and §5 (companion) apply. Then
+continue from §0.
+
+**Watch for an analyzed `.rds` in the manifest.** Many GEO samples ship a raw
+matrix *and* an R object (e.g. a Xenium `*_final_*_object.rds`) that holds the
+authors' curated cell types + embeddings the raw matrix lacks. `geo_build` does
+not pull it. When both exist, that's the §0b decision — surface it, don't silently
+pick. If the `.rds` is the chosen path, **download it yourself** with
+`geo_fetch.py fetch` (below) — never tell the user to fetch it manually from GEO:
+
+```bash
+python scripts/geo_fetch.py fetch GSE345644 \
+  --gsm GSM10012265 --match .rds -o /path/GSE345644_cache
+```
+
+The `--match` substring must select exactly one file (else it lists the
+candidates so you can narrow it); the file streams to local disk, only the log
+crosses. Then use the returned local path as the input to `rds2h5ad` in §0b.
+
+### 0b. Convert an R `.rds` / `.RData` object (Seurat / SingleCellExperiment)
+
+KaroSpace ingests `.h5ad`, not `.rds`. When the input is an R object — handed to
+you directly, or an analyzed object next to a GEO sample's raw matrix — convert it
+first with the [`rds2h5ad`](https://github.com/christoffermattssonlangseth/RDStoH5AD)
+R backend (needs R + `zellkonverter`; `pip install rdstoh5ad`). If the `.rds` is on
+GEO rather than local disk, pull it yourself first with `geo_fetch.py fetch` (see
+§0a) — don't ask the user to download it. Inspect its schema first — object type,
+assay/layer/reduced-dim **names**, cell/gene counts, `has_spatial` — no values
+cross:
+
+```bash
+rds2h5ad inspect /path/GSM10012265_final_xenium_object.rds
+```
+
+**When a dataset offers both a raw matrix and an analyzed `.rds`, don't choose
+silently** — the two paths trade off:
+
+- *raw matrix + §1b* — light, no R dependency, but a de-novo leiden that discards
+  the authors' cell types;
+- *the `.rds`* — the authors' real annotations + UMAP + coordinates, but a larger
+  download and an R conversion.
+
+Lay both out and let the user pick. Then convert the chosen assay (keep embeddings
+and spatial unless told otherwise):
+
+```bash
+rds2h5ad convert /path/GSM10012265_final_xenium_object.rds \
+  /path/GSM10012265_bladder.h5ad --assay RNA
+```
+
+Treat the written `.h5ad` as the input and continue from §0. It usually already
+carries annotations, so **skip §1b**, but still run §5 (companion) and set §3
+normalization from the structure probe. If `rds2h5ad` isn't installed, say so and
+fall back to the raw-matrix path rather than failing.
 
 ### 0. Is this the right file? (single-section trap)
 
@@ -53,6 +139,11 @@ Then build from the merged file. Note a single patient's L+NL is still 1 replica
 per condition — enough for a side-by-side viewer, **not** for condition pseudobulk
 (that needs ≥2 patients, i.e. more `--section` entries).
 
+If it genuinely is one section and there are no siblings to merge, build it as a
+single section rather than forcing a placeholder: pass `--section-key ""` (an empty
+value) and karospace exports the whole dataset as one section. Never repurpose a
+cardinality-1 column (e.g. `orig.ident`) as the section key.
+
 ### 1. Inspect first — always
 
 ```bash
@@ -81,11 +172,44 @@ and a `spatial_graph_present` flag — **no cell values**, so it needs no `sed`
 strip. Two later decisions depend on it: whether a spatial neighbor graph already
 exists (§5) and how X is normalized (§3).
 
+### 1b. Prepare an un-annotated matrix — cluster it first
+
+If the inspect output shows **no analysis-derived annotation at all** — no
+`cell_type` / `celltype` / `annotation` and no clustering (`leiden`/`louvain`/…) —
+the file carries only raw counts and coordinates (a fresh GEO build is the usual
+case). A viewer from it could be coloured gene-by-gene only, with nothing for
+`--main-cell-annotation`. Create a clustering first — the standard scanpy path
+(normalize → log1p → HVG → PCA → neighbors → leiden), run locally:
+
+```bash
+python scripts/preprocess.py /path/GSE243168_xenium.h5ad \
+  -o /path/GSE243168_xenium_leiden.h5ad --resolution 1.0
+```
+
+It writes `obs['leiden']`, a raw `layers['counts']`, and a log1p
+`layers['normalized']` (colour from that in §3), and prints an aggregate log only
+(cluster count + sizes). Use `leiden` as `--main-cell-annotation` in §2.
+Resolution is a **scientific choice**, not a fact: this is a starting point — re-run
+at a different `--resolution` if the user wants finer/coarser structure.
+
+For deeper spatial-domain detection (**CellCharter**) or when the researcher wants
+to own the clustering, generate a notebook instead — it carries the heavier deps
+(scvi-tools + torch) and the biological choices, and runs on their machine/GPU:
+
+```bash
+python scripts/gen_notebook.py /path/GSE243168_xenium.h5ad \
+  -o /path/prep_GSE243168.ipynb --section-key sample_id
+```
+
+That is a **handoff**: tell the user to run the notebook and come back with the
+annotated `.h5ad`, then resume from §0. Skip §1b entirely when the file already
+carries annotations (most researcher-supplied files do).
+
 ### 2. Choose the core flags from the metadata
 
 | Flag | How to pick it |
 | --- | --- |
-| `--section-key` | Column identifying each section/sample. Look for `sample_id`, `Sample Id`, `sample`, `section`, `slide`, `fov`, `library`, `condition`. Must be categorical, cardinality ~2–100. **A candidate with cardinality 1 is a placeholder** (e.g. `orig.ident`, the Seurat default when never set) — that is *not* a real section key. |
+| `--section-key` | Column identifying each section/sample. Look for `sample_id`, `Sample Id`, `sample`, `section`, `slide`, `fov`, `library`, `condition`. Must be categorical, cardinality ~2–100. **A candidate with cardinality 1 is a placeholder** (e.g. `orig.ident`, the Seurat default when never set) — that is *not* a real section key. For a genuinely single-section dataset (no real section column, no siblings to merge — see §0), pass `--section-key ""` (empty) so karospace exports the whole dataset as one section; prefer that over forcing a placeholder. |
 | `--main-cell-annotation` | Primary cell-type column. Prefer a human-readable `cell_type`/`celltype`/`annotation` over clustering when both exist. If only clustering exists, use a mid-resolution one (the plain `leiden` if present) as primary — the rest stay exposed via `--cell-annotations`. |
 | `--section-metadata` | Categorical experimental variables to show as filter chips: `condition`, `stage`, `timepoint`, `region`, `sex`, `genotype`, `treatment`, `model`, `batch`. Pick the ones that vary across sections. |
 | `--cell-annotations` | **Expose EVERY analysis-derived cell annotation, not a curated subset** — users switch between them, so a missed one is a missed view. **Principle (apply it, don't just match names):** a cell annotation is any obs column assigning each cell to a discrete group produced by analysis — clustering, cell-typing, or spatial-domain/niche detection — at any resolution or k. The families are *illustrative, not a whitelist*; catch methods not listed too: clustering (`leiden`, `louvain`, `kmeans`, `walktrap`, `phenograph`, `SNN`, `mclust`, and `<method>_<resolution>` families like `leiden_0_2`…`leiden_4_0`); cell-typing (`cell_type`, `annotation`, `subtype`, `predicted.*`, SingleR/Azimuth-style labels); spatial domains/niches (`CellCharter`, `niche`, `domain`, `UTAG`, `Banksy`, and `<method>_<k>` families like `CellCharter_6`…`CellCharter_30`). The **structural test** is the real net: include any categorical (or low-cardinality integer) obs column, cardinality ~2–300, that isn't an experimental variable (→ `--section-metadata`), an ID (cardinality ≈ cell count, e.g. `cell_id`), or a QC metric. **When unsure, include it.** Never expose ID columns or per-cell continuous QC numerics. **Exception:** columns prefixed `karospace_` (e.g. `karospace_polygon_labels`, `karospace_polygon_count`) and prior-session region/polygon indices (e.g. `polygon_index`) are KaroSpace's *own* round-tripped output from an earlier session, not independent annotations — do **not** sweep them in; mention them so the user can opt in, but leave them out by default. |

@@ -90,7 +90,8 @@ default and no auth: it is a local app with a browser window, not a service.
 | `auth.py` | Detects which credential the CLI subprocess will use and whether it is permitted; no secret is read. |
 | `cli.py` | `karospace-agent build <input> "<intent>"`, `karospace-agent chat [input] ["<intent>"]` (the REPL), `karospace-agent web`, and `karospace-agent auth`. |
 | `web.py` | The browser front end: Starlette app, SSE event hub, one-turn-at-a-time worker (optional `[web]` extra). |
-| `static/index.html` | The single-file page `web.py` serves. |
+| `static/index.html` | The single-file page `web.py` serves (inline SVG logo + favicon). |
+| `static/appicon.png` | The Dock/app icon `desktop.py` sets at runtime for `karospace-agent app`. |
 
 ## Config
 

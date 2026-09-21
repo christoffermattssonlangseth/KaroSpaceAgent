@@ -177,6 +177,42 @@ async def geo_build(args: dict[str, Any]) -> dict[str, Any]:
 # --- Pre-processing -------------------------------------------------------
 
 @tool(
+    "run_preprocess",
+    "Add a transcriptomic clustering to a RAW matrix so it becomes ingestible. A "
+    "freshly acquired file (e.g. from geo_build) has raw counts + coordinates but "
+    "NO cell-type / cluster columns in obs — so a viewer can only be coloured "
+    "gene-by-gene. This runs the standard scanpy path (normalize -> log1p -> HVG "
+    "-> PCA -> neighbors -> leiden) LOCALLY, writing layers['counts'] (raw, "
+    "preserved), layers['normalized'] (log1p, colour from this), and obs['leiden'] "
+    "(feeds --main-cell-annotation / --cell-annotations). Call it when inspect "
+    "shows no analysis-derived annotation column. Returns an aggregate log only "
+    "(cluster count + per-cluster sizes, key names) — no per-cell labels or "
+    "values. Resolution is a scientific choice: the default is a starting point; "
+    "re-run with a different resolution if the user wants finer/coarser clusters. "
+    "Heavier spatial-domain methods (CellCharter) are out of scope here — those "
+    "belong in a generated notebook the researcher runs.",
+    {
+        "input_path": Annotated[str, "Input .h5ad with raw counts in X."],
+        "output": Annotated[str, "Output .h5ad path (clustered)."],
+        "resolution": Annotated[
+            float, "Leiden resolution; higher = more clusters. Default 1.0."
+        ],
+        "key": Annotated[str, "obs column name for the clustering. Default 'leiden'."],
+    },
+)
+async def run_preprocess(args: dict[str, Any]) -> dict[str, Any]:
+    resolution = float(args.get("resolution") or 1.0)
+    key = (args.get("key") or "leiden").strip() or "leiden"
+    rr = commands.run_preprocess(
+        str(args["input_path"]),
+        str(args["output"]),
+        resolution=resolution,
+        key=key,
+    )
+    return _report(rr, f"preprocess.py {args['input_path']} --resolution {resolution}")
+
+
+@tool(
     "merge_sections",
     "Merge per-section .h5ad files into one KaroSpace-ready file, adding "
     "sample_id / condition / sample_batch. Use when the input is a single "
@@ -276,6 +312,7 @@ ALL_TOOLS = [
     cli_help,
     geo_manifest,
     geo_build,
+    run_preprocess,
     merge_sections,
     run_companion,
     run_export,

@@ -29,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MERGE_SCRIPT = REPO_ROOT / "scripts" / "merge_sections.py"
 STRUCTURE_SCRIPT = REPO_ROOT / "scripts" / "inspect_structure.py"
 GEO_SCRIPT = REPO_ROOT / "scripts" / "geo_fetch.py"
+PREPROCESS_SCRIPT = REPO_ROOT / "scripts" / "preprocess.py"
 
 # Default timeout for a full export (analytics + DE + pathway can be minutes on
 # large data). Override with KAROSPACE_AGENT_TIMEOUT (seconds).
@@ -455,6 +456,37 @@ def run_geo_build(
         argv.append("--include-control-features")
     if cache_dir:
         argv += ["--cache-dir", cache_dir]
+    return run(argv, timeout=timeout)
+
+
+def run_preprocess(
+    input_path: str,
+    output: str,
+    method: str = "leiden",
+    resolution: float = 1.0,
+    n_neighbors: int = 15,
+    n_pcs: int = 50,
+    n_hvg: int = 2000,
+    key: str = "leiden",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run scripts/preprocess.py — add a leiden clustering to a raw .h5ad.
+
+    Uses the karospace scientific interpreter (needs scanpy/leidenalg). Long
+    enough to stream progress like an export; the model still receives only the
+    captured, truncated aggregate log (cluster count + sizes, key names).
+    """
+    if not PREPROCESS_SCRIPT.exists():
+        return RunResult(127, "", f"preprocess script missing: {PREPROCESS_SCRIPT}")
+    argv = [
+        merge_python(), str(PREPROCESS_SCRIPT), input_path, "-o", output,
+        "--method", method,
+        "--resolution", str(resolution),
+        "--n-neighbors", str(n_neighbors),
+        "--n-pcs", str(n_pcs),
+        "--n-hvg", str(n_hvg),
+        "--key", key,
+    ]
     return run(argv, timeout=timeout)
 
 

@@ -51,8 +51,9 @@ Acquire  — geo_manifest      list a GEO accession's samples/files/platform (pu
 Inspect  — inspect_input     sanitized obs/feature metadata for a file. ALWAYS call first.
            inspect_structure X dtype + is-integer, layers, obsm, obsp (graph present?).
            cli_help          verify a flag exists before using it. Never invent flags.
-Enrich   — merge_sections    merge per-section files that lack sample metadata.
-           run_companion      pre-process (spatial graph / analytics) before export.
+Prepare  — run_preprocess    add a leiden clustering when a raw file has no annotations (writes obs['leiden']).
+           merge_sections    merge per-section files that lack sample metadata.
+Enrich   — run_companion      pre-process (spatial graph / analytics) before export.
 Export   — run_export        run the export; read its exit code + errors and iterate.
 Deliver  — package_sidecar   turn a sidecar viewer into a single-file .karospace.
            validate_output   confirm artifacts actually wrote (metadata only)."""
@@ -79,8 +80,9 @@ path, turn it into a local .h5ad first:
   fails LOUDLY, naming what it found — relay that to the user rather than
   retrying blindly (they may need to supply the file another way).
 - Then treat the written .h5ad as the input and continue from §0 below. A
-  fresh geo_build file has raw-counts X and no spatial graph, so §5 (companion)
-  and §3 (LogNormalize / counts layer) apply as usual."""
+  fresh geo_build file has raw-counts X, no spatial graph, and NO obs annotations
+  (no cell_type / cluster columns) — so §1b (run_preprocess to create obs['leiden']),
+  §5 (companion) and §3 (LogNormalize / counts layer) all apply as usual."""
 
 # --- Stage: Inspect (single-section trap + read the schema) ----------------
 
@@ -109,7 +111,24 @@ obsm, and obsp; inspect_structure fills that gap with schema/aggregates only (X
 dtype + all_integer, layer names+dtypes, obsm keys+cols, obsp keys, and a
 spatial_graph_present flag). Two decisions depend on it: whether a spatial
 neighbor graph already exists (§5) and how X is normalized (§3). Still no cell
-values cross — reason from structure alone."""
+values cross — reason from structure alone.
+
+## 1b. Prepare an un-annotated matrix — cluster it first
+If inspect_input shows NO analysis-derived annotation at all — no cell_type /
+celltype / annotation column and no clustering (leiden/louvain/…) — the file
+carries only raw counts and coordinates (a fresh geo_build file is the usual
+case). A viewer built from it could be coloured gene-by-gene only, with nothing
+for --main-cell-annotation. Create a clustering first: call run_preprocess on the
+file (it runs scanpy normalize → log1p → HVG → PCA → neighbors → leiden LOCALLY),
+which writes obs['leiden'], a raw layers['counts'], and a log1p
+layers['normalized']. Use the leiden column as --main-cell-annotation in §2 and
+point display normalization at layers['normalized'] in §3. Resolution is a
+scientific choice, not a fact: run_preprocess uses a default (1.0) and reports the
+cluster count — if the user wants finer/coarser structure, re-run at a different
+resolution rather than treating the first pass as ground truth. Skip this step
+entirely when the file already carries annotations (most researcher-supplied
+files do). Deeper spatial-domain methods (e.g. CellCharter) are out of scope for
+this tool — offer a generated notebook for those instead."""
 
 # --- Stage: Design (core flags + statistics/normalization) -----------------
 

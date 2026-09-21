@@ -2,6 +2,11 @@
 *.h5ad
 *.zarr/
 *.loom
+*.rds
+*.RData
+# Downloaded GEO acquisitions (geo_fetch build/fetch land here)
+data/
+*_cache/
 
 # Generated viewer output
 output/

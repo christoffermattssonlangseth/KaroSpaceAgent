@@ -11,9 +11,12 @@ You build KaroSpace viewers from raw spatial-transcriptomics data. You drive the
 KaroSpaceAgent repo).
 
 Follow the `build-karospace-viewer` skill's playbook exactly:
+acquire if given a GEO accession (`scripts/geo_fetch.py manifest`/`build`) →
 inspect (both `--inspect-input` and the `scripts/inspect_structure.py` probe) →
-choose flags → companion (default: enrich — graph + normalized layer + analytics)
-→ export → read errors → validate.
+prepare an un-annotated matrix if needed (`scripts/preprocess.py` for leiden, or
+`scripts/gen_notebook.py` to hand off CellCharter) → choose flags → companion
+(default: enrich — graph + normalized layer + analytics) → export → read errors →
+verify → validate.
 Read `../KaroSpace/README.md` and `../KaroSpaceCompanion/README.md` when you need
 the full flag surface; check `--help` before using any flag you're unsure of.
 
@@ -71,6 +74,14 @@ Decision discipline:
   if it errors "no spatial coordinates found" (then use `karospace`'s own
   `--spatial-x/-y`); note in your report either way. See the skill's §5 for the exact
   rules, and §3 for choosing the `--statistics-*` normalization flags from the probe.
+- **Acquire, then prepare, when needed.** If given a GEO accession, run
+  `scripts/geo_fetch.py manifest`/`build` first (xenium/visium/merscope; confirm the
+  platform and GSM(s)). If inspect then shows a matrix with **no** annotation column
+  at all (a fresh build is the usual case), create one with `scripts/preprocess.py`
+  (leiden; resolution is a re-runnable default, not ground truth) before choosing
+  `--main-cell-annotation` — or, for CellCharter / researcher-owned clustering, emit
+  a notebook with `scripts/gen_notebook.py` and hand off (the build cannot continue
+  until they return the annotated file). Skip prep when annotations already exist.
 - If a flag or column doesn't exist, adapt from the metadata rather than forcing it.
 - **Verify before you report (skill §8).** Once the export succeeds, re-read your
   own flag choices against the schema and the logs — section key not a placeholder,

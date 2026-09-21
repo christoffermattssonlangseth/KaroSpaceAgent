@@ -1,6 +1,6 @@
 ---
 name: build-karospace-viewer
-description: Build a KaroSpace HTML viewer from a raw .h5ad / SpatialData .zarr. Use when the user wants to create, generate, or export a KaroSpace spatial-transcriptomics viewer, or hands you a spatial dataset and asks to visualize it. Inspects the data, chooses correct export flags, optionally runs the companion pre-processor, runs the export, and validates the result.
+description: Build a KaroSpace HTML viewer from a raw .h5ad / SpatialData .zarr — or from a GEO accession. Use when the user wants to create, generate, or export a KaroSpace spatial-transcriptomics viewer, hands you a spatial dataset, or gives a GEO accession to visualize. Can acquire data from GEO, cluster an un-annotated matrix (leiden) or hand off heavier prep (CellCharter) as a notebook, inspects the data, chooses correct export flags, optionally runs the companion pre-processor, runs the export, and validates the result.
 ---
 
 # Build a KaroSpace viewer
@@ -24,6 +24,35 @@ is piped through a strip step — always run it that way, never the raw form.
 Reason from names, types, and cardinalities alone. All compute runs locally.
 
 ## Workflow
+
+### 0a. Acquire from GEO (when the input is an accession, not a file)
+
+If the user gives a GEO accession (`GSExxxxx` / `GSMxxxxx`) or a GEO URL instead
+of a path, turn it into a local `.h5ad` first. List what the series holds — public
+catalogue metadata only, no data values:
+
+```bash
+python scripts/geo_fetch.py manifest GSE243168
+```
+
+It prints each sample's title, organism, instrument, inferred platform
+(xenium / visium / visium_hd / chromium / …), and every supplementary FILENAME +
+size. Pick the sample(s) and platform — many series are multi-platform or
+multi-section, so **don't assume**; confirm with the user which platform / GSM(s)
+they want. Then build, pulling only the matrix members (for Xenium, out of the
+multi-GB `outs.zip` via range requests — never the transcripts table or images):
+
+```bash
+python scripts/geo_fetch.py build GSE243168 \
+  --platform xenium --gsm GSM7782698 -o /path/GSE243168_xenium.h5ad
+```
+
+Supported platforms: `xenium`, `visium`, `merscope`. An unsupported platform or an
+unfamiliar layout fails **loudly**, naming what it found — relay that rather than
+retrying blindly. The download and assembly run locally; only catalogue metadata
+crosses. A fresh build has raw-counts X, no spatial graph, and **no obs
+annotations** — so §1b (cluster it) and §5 (companion) both apply. Then continue
+from §0.
 
 ### 0. Is this the right file? (single-section trap)
 
@@ -80,6 +109,39 @@ an `all_integer` flag, layer names+dtypes, `obsm` keys+column counts, `obsp` key
 and a `spatial_graph_present` flag — **no cell values**, so it needs no `sed`
 strip. Two later decisions depend on it: whether a spatial neighbor graph already
 exists (§5) and how X is normalized (§3).
+
+### 1b. Prepare an un-annotated matrix — cluster it first
+
+If the inspect output shows **no analysis-derived annotation at all** — no
+`cell_type` / `celltype` / `annotation` and no clustering (`leiden`/`louvain`/…) —
+the file carries only raw counts and coordinates (a fresh GEO build is the usual
+case). A viewer from it could be coloured gene-by-gene only, with nothing for
+`--main-cell-annotation`. Create a clustering first — the standard scanpy path
+(normalize → log1p → HVG → PCA → neighbors → leiden), run locally:
+
+```bash
+python scripts/preprocess.py /path/GSE243168_xenium.h5ad \
+  -o /path/GSE243168_xenium_leiden.h5ad --resolution 1.0
+```
+
+It writes `obs['leiden']`, a raw `layers['counts']`, and a log1p
+`layers['normalized']` (colour from that in §3), and prints an aggregate log only
+(cluster count + sizes). Use `leiden` as `--main-cell-annotation` in §2.
+Resolution is a **scientific choice**, not a fact: this is a starting point — re-run
+at a different `--resolution` if the user wants finer/coarser structure.
+
+For deeper spatial-domain detection (**CellCharter**) or when the researcher wants
+to own the clustering, generate a notebook instead — it carries the heavier deps
+(scvi-tools + torch) and the biological choices, and runs on their machine/GPU:
+
+```bash
+python scripts/gen_notebook.py /path/GSE243168_xenium.h5ad \
+  -o /path/prep_GSE243168.ipynb --section-key sample_id
+```
+
+That is a **handoff**: tell the user to run the notebook and come back with the
+annotated `.h5ad`, then resume from §0. Skip §1b entirely when the file already
+carries annotations (most researcher-supplied files do).
 
 ### 2. Choose the core flags from the metadata
 

@@ -234,6 +234,33 @@ values into existence — verify against `--help` and the inspect output.
 - Report exactly what was produced (both the sidecar viewer and the `.karospace`),
   the key flags chosen and *why*, and how to open each.
 
+### 8. Verify before you finish — schema-only self-review
+
+Before you report success, re-read your **own** choices against the schema and the
+export/companion logs. This review crosses no new information — only what you
+already have — so it is always safe. A failed check is a reason to iterate, not a
+footnote:
+
+- **Section key is real, not a placeholder** — cardinality ~2–100, never a
+  cardinality-1 column (the single-section trap, §0).
+- **No annotation left behind** — every analysis-derived cell annotation in `obs`
+  made it into `--cell-annotations` (§2), and no ID / per-cell QC numeric /
+  `karospace_*` column was swept in by mistake.
+- **Coloring is neither double- nor under-normalized** — the `--statistics-*`
+  choice matches the structure probe (§3): no already-normalized X fed to
+  RC/LogNormalize (Failure A), no raw counts left on the no-log default (Failure B).
+- **The neighbor graph exists, or you said why not** — the companion ran (§5), or
+  the report names the specific fallback (binary missing / no coordinates found).
+- **Pseudobulk matches the design** — `--pseudobulk auto` unless the schema clearly
+  shows one sample per group (§3).
+- **Both artifacts are actually present** — `validate_output`/stat confirmed the
+  viewer AND the `.karospace` (§4, §7), not merely that the command exited 0.
+- **The boundary held** — you neither requested nor emitted a data value.
+
+For a stronger check, delegate this pass to the `karospace-viewer-reviewer`
+subagent, which sees only the schema, the chosen flags, and the logs and reports
+what it would change.
+
 ## Before you finish
 
 Summarize: the flags you chose and the reasoning, whether the companion was run,

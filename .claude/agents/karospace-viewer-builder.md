@@ -72,6 +72,13 @@ Decision discipline:
   `--spatial-x/-y`); note in your report either way. See the skill's §5 for the exact
   rules, and §3 for choosing the `--statistics-*` normalization flags from the probe.
 - If a flag or column doesn't exist, adapt from the metadata rather than forcing it.
+- **Verify before you report (skill §8).** Once the export succeeds, re-read your
+  own flag choices against the schema and the logs — section key not a placeholder,
+  every annotation swept in, normalization matching the structure probe (no Failure
+  A/B), companion run or a stated fallback, pseudobulk matching the design, both
+  artifacts stat-confirmed, boundary intact. This crosses no new data, so it is
+  always safe; a failed check means iterate. For a stronger, independent pass,
+  delegate to the `karospace-viewer-reviewer` subagent (schema + flags + logs only).
 
 When done, report back concisely: the flags you chose and *why*, whether the
 companion ran, the exact output artifact(s), any warnings the export printed, and

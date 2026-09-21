@@ -28,6 +28,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MERGE_SCRIPT = REPO_ROOT / "scripts" / "merge_sections.py"
 STRUCTURE_SCRIPT = REPO_ROOT / "scripts" / "inspect_structure.py"
+GEO_SCRIPT = REPO_ROOT / "scripts" / "geo_fetch.py"
 
 # Default timeout for a full export (analytics + DE + pathway can be minutes on
 # large data). Override with KAROSPACE_AGENT_TIMEOUT (seconds).
@@ -411,6 +412,50 @@ def run_structure(input_path: str, table: str = "", timeout: int = 600) -> RunRe
     if table:
         argv += ["--table", table]
     return run(argv, timeout=timeout, stream=False)
+
+
+def run_geo_manifest(accession: str, sizes: bool = True, timeout: int = 300) -> RunResult:
+    """Run scripts/geo_fetch.py manifest — list a GEO accession's samples/files.
+
+    Uses the karospace scientific interpreter (the script lazily needs remotezip
+    only for `build`, but sharing one interpreter keeps deps in one place).
+    Emits public GEO catalogue metadata only; `stream=False` for console parity
+    with the other inspection probes.
+    """
+    if not GEO_SCRIPT.exists():
+        return RunResult(127, "", f"geo script missing: {GEO_SCRIPT}")
+    argv = [merge_python(), str(GEO_SCRIPT), "manifest", accession]
+    if not sizes:
+        argv.append("--no-sizes")
+    return run(argv, timeout=timeout, stream=False)
+
+
+def run_geo_build(
+    accession: str,
+    gsm_ids: list[str],
+    platform: str,
+    output: str,
+    include_control: bool = False,
+    cache_dir: str = "",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run scripts/geo_fetch.py build — selectively download + assemble a .h5ad.
+
+    Long-running (range-downloads matrix members, then writes the file), so it
+    streams progress to the local console like an export does. The model still
+    receives only the captured, truncated aggregate log.
+    """
+    if not GEO_SCRIPT.exists():
+        return RunResult(127, "", f"geo script missing: {GEO_SCRIPT}")
+    argv = [merge_python(), str(GEO_SCRIPT), "build", accession,
+            "--platform", platform, "-o", output]
+    for gsm in gsm_ids:
+        argv += ["--gsm", gsm]
+    if include_control:
+        argv.append("--include-control-features")
+    if cache_dir:
+        argv += ["--cache-dir", cache_dir]
+    return run(argv, timeout=timeout)
 
 
 def run_merge(sections: list[str], output: str, timeout: int = DEFAULT_TIMEOUT) -> RunResult:

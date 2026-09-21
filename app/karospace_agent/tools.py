@@ -108,6 +108,72 @@ async def cli_help(args: dict[str, Any]) -> dict[str, Any]:
     return _result(truncate(rr.stdout or rr.stderr))
 
 
+# --- Acquisition (GEO) ----------------------------------------------------
+
+@tool(
+    "geo_manifest",
+    "List a public GEO accession's samples and supplementary files so you can "
+    "choose what to build. Give a series (GSExxxxx) or one sample (GSMxxxxx); "
+    "returns each sample's title, organism, instrument, inferred platform "
+    "(xenium / visium / visium_hd / chromium / ...), and every supplementary "
+    "FILENAME with its size. Only public GEO catalogue metadata crosses — no "
+    "data values. Call this before geo_build to pick the --gsm ids and platform. "
+    "Note which samples are the platform the user asked for; sizes reveal the "
+    "big bundles (e.g. a Xenium *_outs.zip) that geo_build reads selectively.",
+    {
+        "accession": Annotated[str, "GEO accession: a series 'GSE...' or a sample 'GSM...'."],
+        "with_sizes": Annotated[
+            bool, "HEAD each file for its size (slower). Pass false to skip."
+        ],
+    },
+)
+async def geo_manifest(args: dict[str, Any]) -> dict[str, Any]:
+    accession = str(args["accession"]).strip()
+    with_sizes = bool(args.get("with_sizes", True))
+    rr = commands.run_geo_manifest(accession, sizes=with_sizes)
+    return _report(rr, f"geo_fetch.py manifest {accession}")
+
+
+@tool(
+    "geo_build",
+    "Download ONLY the matrix members of the chosen GEO samples and assemble a "
+    "minimal .h5ad (raw counts in X + spatial coordinates in obsm) ready for the "
+    "pipeline. For Xenium it pulls cell_feature_matrix.h5 + cells.parquet out of "
+    "each sample's multi-GB *_outs.zip via range requests — the transcripts "
+    "table and morphology images are never transferred, and the 31 GB series "
+    "RAW.tar is avoided. Choose gsm_ids and platform from geo_manifest first. "
+    "Returns an aggregate build log only (members pulled + sizes, then cell/gene "
+    "counts and obs/var/obsm key names) — then call inspect_input / "
+    "inspect_structure on the written file for the schema. Supported platforms: "
+    "'xenium' (pulls matrix members from the outs.zip), 'visium' (filtered "
+    "matrix + tissue_positions), and 'merscope' (Vizgen cell_by_gene + "
+    "cell_metadata). Others report what an assembler would need.",
+    {
+        "accession": Annotated[str, "GEO accession the samples belong to (GSE or GSM)."],
+        "gsm_ids": Annotated[
+            list, "Sample accessions to include. Empty = all samples of `platform`."
+        ],
+        "platform": Annotated[str, "Assembler to use. 'xenium' is implemented."],
+        "output": Annotated[str, "Output .h5ad path."],
+        "include_control_features": Annotated[
+            bool, "Keep negative-control / blank probes. Default false (Gene Expression only)."
+        ],
+    },
+)
+async def geo_build(args: dict[str, Any]) -> dict[str, Any]:
+    accession = str(args["accession"]).strip()
+    gsm_ids = [str(g).strip() for g in args.get("gsm_ids", []) if str(g).strip()]
+    platform = (str(args.get("platform") or "xenium")).strip()
+    rr = commands.run_geo_build(
+        accession,
+        gsm_ids,
+        platform,
+        str(args["output"]),
+        include_control=bool(args.get("include_control_features", False)),
+    )
+    return _report(rr, f"geo_fetch.py build {accession} --platform {platform}")
+
+
 # --- Pre-processing -------------------------------------------------------
 
 @tool(
@@ -208,6 +274,8 @@ ALL_TOOLS = [
     inspect_input,
     inspect_structure,
     cli_help,
+    geo_manifest,
+    geo_build,
     merge_sections,
     run_companion,
     run_export,

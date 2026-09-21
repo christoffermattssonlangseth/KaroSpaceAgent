@@ -48,6 +48,7 @@ for it.
 
 Acquire  — geo_manifest      list a GEO accession's samples/files/platform (public metadata).
            geo_build         download only the matrix members of chosen samples -> local .h5ad.
+           geo_fetch_file    download ONE supplementary file geo_build skips (e.g. an analyzed *_object.rds) to disk.
            rds_inspect       schema of an R .rds/.RData object (Seurat/SCE): assays, layers, embeddings, has_spatial.
            rds_convert       convert an .rds/.RData -> .h5ad (R backend) to keep the authors' annotations/embeddings.
 Inspect  — inspect_input     sanitized obs/feature metadata for a file. ALWAYS call first.
@@ -90,12 +91,19 @@ path, turn it into a local .h5ad first:
   R .rds/.RData (e.g. a Xenium '*_final_*_object.rds'), which typically holds the
   authors' curated cell types + embeddings that the raw matrix lacks. geo_build
   does NOT pull it. When both a raw matrix and such an .rds exist, that is the §0b
-  decision below — surface it to the user, don't silently pick.
+  decision below — surface it to the user, don't silently pick. If the .rds is
+  the chosen path, download it YOURSELF with geo_fetch_file (accession, gsm, and a
+  filename substring like '.rds' from the manifest) — NEVER tell the user to fetch
+  it manually from GEO. The file streams to local disk; only the log crosses.
 
 ## 0b. Convert an R .rds / .RData object (Seurat / SingleCellExperiment)
 KaroSpace ingests .h5ad, not .rds. When the input is an R object — a file the
 user hands you directly, or an analyzed object sitting alongside a GEO sample's
 raw matrix — convert it first with the rds2h5ad R backend:
+- If the .rds lives on GEO (not already on local disk), fetch it yourself first
+  with geo_fetch_file (accession, gsm, filename substring, an output dir). Do NOT
+  ask the user to download it — you have the tool. Then use the returned local
+  path as the input to rds_inspect / rds_convert.
 - Call rds_inspect to read its schema (object type, available assays, layer and
   reduced-dim NAMES, cell/gene counts, has_spatial). No values cross — same
   boundary as inspect_input. Use it to see whether the object actually carries

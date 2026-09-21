@@ -54,6 +54,14 @@ a raw matrix and an analyzed `.rds` (e.g. a Xenium `*_final_*_object.rds`), the
 coordinates* live. `geo_build` only pulls the raw matrix, so without a converter
 the agent would throw that analysis away and re-cluster from scratch with leiden.
 
+The `.rds` also isn't among the members `geo_build` extracts, so acquiring it is
+its own step: `geo_fetch.py fetch` (the `geo_fetch_file` tool) downloads one named
+supplementary file straight to local disk. This is what lets the agent get the
+`.rds` **itself** rather than asking the researcher to download the (often
+100 MB+) file from GEO by hand — the bytes go to disk, only the log crosses the
+boundary. The flow is `geo_manifest` (spot the `.rds`) → `geo_fetch_file` (pull
+it) → `rds_inspect`/`rds_convert` (convert it) → build.
+
 **`rds_inspect` / `rds_convert`** wrap the
 [`rds2h5ad`](https://github.com/christoffermattssonlangseth/RDStoH5AD) CLI (a
 Python front end over an R backend: R owns the S4/Seurat deserialization,

@@ -136,6 +136,88 @@ def test_unsupported_platform_reports_needs(monkeypatch, tmp_path):
         assert "tissue_positions.parquet" in str(e)  # tells you what it would need
 
 
+def _fetch_manifest(monkeypatch, files):
+    monkeypatch.setattr(geo, "build_manifest", lambda acc, sizes=False: {
+        "accession": acc, "title": "", "summary": "", "n_samples": 1,
+        "samples": [{"gsm": "GSM1", "platform": "xenium", "files": files}],
+    })
+
+
+def test_fetch_downloads_the_single_match_to_disk(monkeypatch, tmp_path):
+    _fetch_manifest(monkeypatch, [
+        {"name": "GSM1_cell_feature_matrix.h5", "url": "u1", "size_bytes": None},
+        {"name": "GSM1_final_xenium_object.rds", "url": "u2", "size_bytes": None},
+    ])
+    pulled = {}
+
+    def fake_download(url, dest, log):
+        pulled["url"] = url
+        pulled["dest"] = dest
+        return dest
+
+    monkeypatch.setattr(geo, "_download", fake_download)
+    out = geo.run_fetch("GSE345644", "GSM1", ".rds", tmp_path)
+    assert pulled["url"] == "u2"  # picked the .rds, not the matrix
+    assert pulled["dest"] == tmp_path / "GSM1_final_xenium_object.rds"
+    assert "fetched:" in out and "GSM1_final_xenium_object.rds" in out
+
+
+def test_fetch_raises_listing_files_when_no_match(monkeypatch, tmp_path):
+    _fetch_manifest(monkeypatch, [{"name": "GSM1_cell_feature_matrix.h5", "url": "u1"}])
+    monkeypatch.setattr(geo, "_download", lambda *a, **k: None)
+    try:
+        geo.run_fetch("GSE1", "GSM1", ".rds", tmp_path)
+        assert False, "expected a loud no-match failure"
+    except ValueError as e:
+        assert ".rds" in str(e) and "GSM1_cell_feature_matrix.h5" in str(e)
+
+
+def test_fetch_raises_when_pattern_is_ambiguous(monkeypatch, tmp_path):
+    _fetch_manifest(monkeypatch, [
+        {"name": "GSM1_a_object.rds", "url": "u1"},
+        {"name": "GSM1_b_object.rds", "url": "u2"},
+    ])
+    monkeypatch.setattr(geo, "_download", lambda *a, **k: None)
+    try:
+        geo.run_fetch("GSE1", "GSM1", ".rds", tmp_path)
+        assert False, "expected an ambiguity failure"
+    except ValueError as e:
+        assert "matches 2 files" in str(e)
+
+
+def test_fetch_raises_for_unknown_gsm(monkeypatch, tmp_path):
+    _fetch_manifest(monkeypatch, [{"name": "GSM1_x.rds", "url": "u1"}])
+    try:
+        geo.run_fetch("GSE1", "GSM9", ".rds", tmp_path)
+        assert False, "expected an unknown-GSM failure"
+    except ValueError as e:
+        assert "GSM9" in str(e)
+
+
+def test_fetch_file_argv_carries_gsm_match_and_gunzip(monkeypatch):
+    captured = {}
+
+    def fake_run(argv, timeout=0):
+        captured["argv"] = argv
+        return commands.RunResult(0, "", "")
+
+    monkeypatch.setattr(commands, "run", fake_run)
+    monkeypatch.setattr(commands, "merge_python", lambda: "PY")
+    commands.run_geo_fetch_file("GSE1", "GSM1", ".rds", "/tmp/cache", gunzip=True)
+    argv = captured["argv"]
+    assert argv[:4] == ["PY", str(commands.GEO_SCRIPT), "fetch", "GSE1"]
+    assert "--gsm" in argv and "GSM1" in argv
+    assert "--match" in argv and ".rds" in argv
+    assert "-o" in argv and "/tmp/cache" in argv
+    assert "--gunzip" in argv
+
+
+def test_fetch_file_tool_is_registered_and_allowed():
+    from karospace_agent import agent, tools
+    assert "geo_fetch_file" in tools.TOOL_NAMES
+    assert "mcp__karospace__geo_fetch_file" in agent.ALLOWED_TOOL_NAMES
+
+
 def test_build_argv_carries_gsms_and_flags(monkeypatch):
     captured = {}
 

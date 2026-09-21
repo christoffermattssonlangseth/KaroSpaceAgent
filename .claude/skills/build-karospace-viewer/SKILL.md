@@ -58,16 +58,28 @@ from §0.
 matrix *and* an R object (e.g. a Xenium `*_final_*_object.rds`) that holds the
 authors' curated cell types + embeddings the raw matrix lacks. `geo_build` does
 not pull it. When both exist, that's the §0b decision — surface it, don't silently
-pick.
+pick. If the `.rds` is the chosen path, **download it yourself** with
+`geo_fetch.py fetch` (below) — never tell the user to fetch it manually from GEO:
+
+```bash
+python scripts/geo_fetch.py fetch GSE345644 \
+  --gsm GSM10012265 --match .rds -o /path/GSE345644_cache
+```
+
+The `--match` substring must select exactly one file (else it lists the
+candidates so you can narrow it); the file streams to local disk, only the log
+crosses. Then use the returned local path as the input to `rds2h5ad` in §0b.
 
 ### 0b. Convert an R `.rds` / `.RData` object (Seurat / SingleCellExperiment)
 
 KaroSpace ingests `.h5ad`, not `.rds`. When the input is an R object — handed to
 you directly, or an analyzed object next to a GEO sample's raw matrix — convert it
 first with the [`rds2h5ad`](https://github.com/christoffermattssonlangseth/RDStoH5AD)
-R backend (needs R + `zellkonverter`; `pip install rdstoh5ad`). Inspect its schema
-first — object type, assay/layer/reduced-dim **names**, cell/gene counts,
-`has_spatial` — no values cross:
+R backend (needs R + `zellkonverter`; `pip install rdstoh5ad`). If the `.rds` is on
+GEO rather than local disk, pull it yourself first with `geo_fetch.py fetch` (see
+§0a) — don't ask the user to download it. Inspect its schema first — object type,
+assay/layer/reduced-dim **names**, cell/gene counts, `has_spatial` — no values
+cross:
 
 ```bash
 rds2h5ad inspect /path/GSM10012265_final_xenium_object.rds

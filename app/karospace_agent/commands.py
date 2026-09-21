@@ -470,6 +470,31 @@ def run_geo_build(
     return run(argv, timeout=timeout)
 
 
+def run_geo_fetch_file(
+    accession: str,
+    gsm: str,
+    match: str,
+    output_dir: str,
+    gunzip: bool = False,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run scripts/geo_fetch.py fetch — download ONE supplementary file to disk.
+
+    For the files `geo_build` skips — above all an analyzed `*_object.rds` that
+    carries the authors' curated cell types + embeddings — so the agent can pull
+    it itself and convert it, instead of punting the download to the user. Bytes
+    go to local disk only; no data value crosses the boundary. Long-running
+    (streams a large file), so it tees progress to the console like build/export.
+    """
+    if not GEO_SCRIPT.exists():
+        return RunResult(127, "", f"geo script missing: {GEO_SCRIPT}")
+    argv = [merge_python(), str(GEO_SCRIPT), "fetch", accession,
+            "--gsm", gsm, "--match", match, "-o", output_dir]
+    if gunzip:
+        argv.append("--gunzip")
+    return run(argv, timeout=timeout)
+
+
 def run_preprocess(
     input_path: str,
     output: str,

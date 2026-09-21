@@ -621,6 +621,57 @@ def run_build(accession: str, gsm_ids: list[str], platform: str, output: Path,
     return "\n".join(log)
 
 
+# --- fetch (one arbitrary supplementary file) ------------------------------
+
+def run_fetch(accession: str, gsm: str, pattern: str, output_dir: Path,
+              gunzip: bool = False) -> str:
+    """Download ONE supplementary file (matched by filename substring) to disk.
+
+    For the files `geo_build` deliberately skips — above all an analyzed
+    `*_object.rds` that carries the authors' curated cell types, embeddings and
+    coordinates — so the agent can convert it (`rds_inspect`/`rds_convert`)
+    instead of re-clustering the raw matrix from scratch. Boundary-safe: this
+    only streams bytes to local disk; no data value is read into anyone's context.
+    """
+    log: list[str] = [f"GEO fetch: {accession}  {gsm}  match='{pattern}'"]
+
+    manifest = build_manifest(accession, sizes=False)
+    by_gsm = {s["gsm"]: s for s in manifest["samples"]}
+    if gsm not in by_gsm:
+        raise ValueError(
+            f"GSM '{gsm}' not in {accession}. Samples: " + ", ".join(by_gsm))
+    sample = by_gsm[gsm]
+
+    low = pattern.lower()
+    matches = [f for f in sample["files"] if low in f["name"].lower()]
+    if not matches:
+        names = ", ".join(f["name"] for f in sample["files"]) or "(none)"
+        raise ValueError(
+            f"{gsm}: no supplementary file matching '{pattern}'. "
+            f"Files present: {names}")
+    if len(matches) > 1:
+        names = ", ".join(f["name"] for f in matches)
+        raise ValueError(
+            f"{gsm}: '{pattern}' matches {len(matches)} files ({names}); "
+            "narrow the pattern so it selects exactly one.")
+
+    hit = matches[0]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    dest = output_dir / hit["name"]
+    if dest.exists() and dest.stat().st_size > 0:
+        log.append(f"    = {hit['name']}  (already on disk at {dest})")
+    else:
+        _download(hit["url"], dest, log)
+    if gunzip:
+        dest = _gunzip_if_needed(dest)
+
+    log.append("")
+    log.append(f"fetched: {dest}")
+    log.append("Next: for an .rds/.RData object run rds_inspect then rds_convert on "
+               "this path; otherwise inspect_input / inspect_structure.")
+    return "\n".join(log)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Fetch a GEO accession into a minimal AnnData.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -638,11 +689,23 @@ def main() -> int:
     b.add_argument("--include-control-features", action="store_true",
                    help="Keep negative-control / blank probes (default: Gene Expression only).")
 
+    f = sub.add_parser("fetch", help="Download one supplementary file (e.g. an analyzed .rds) to disk.")
+    f.add_argument("accession", help="GSE or GSM accession.")
+    f.add_argument("--gsm", required=True, help="Sample whose file to fetch.")
+    f.add_argument("--match", required=True,
+                   help="Substring of the filename to fetch (e.g. '.rds' or 'final_xenium_object').")
+    f.add_argument("-o", "--output-dir", required=True, help="Directory to download into.")
+    f.add_argument("--gunzip", action="store_true", help="Decompress a .gz payload after download.")
+
     args = ap.parse_args()
 
     try:
         if args.cmd == "manifest":
             print(format_manifest(build_manifest(args.accession, sizes=not args.no_sizes)))
+            return 0
+        if args.cmd == "fetch":
+            print(run_fetch(args.accession, args.gsm, args.match,
+                            Path(args.output_dir), gunzip=args.gunzip))
             return 0
         output = Path(args.output)
         cache = Path(args.cache_dir) if args.cache_dir else output.parent / f"{args.accession}_cache"

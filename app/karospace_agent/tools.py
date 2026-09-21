@@ -175,6 +175,45 @@ async def geo_build(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @tool(
+    "geo_fetch_file",
+    "Download ONE supplementary file from a GEO sample straight to local disk — "
+    "the files geo_build deliberately skips. Its main use: pull an analyzed "
+    "'*_object.rds' (a Xenium/Seurat/SingleCellExperiment object carrying the "
+    "authors' curated cell types + embeddings + coordinates) so you can convert "
+    "it with rds_inspect/rds_convert, instead of asking the user to download it "
+    "or throwing the analysis away and re-clustering the raw matrix. Match the "
+    "file by a substring of its FILENAME (from geo_manifest), e.g. '.rds' or "
+    "'final_xenium_object'; the pattern must select exactly one file or it errors "
+    "with the candidates. Downloads bytes to local disk only — nothing but the "
+    "aggregate log crosses the boundary. Returns the local path; then call "
+    "rds_inspect on it (for an .rds) or inspect_input / inspect_structure.",
+    {
+        "accession": Annotated[str, "GEO accession the sample belongs to (GSE or GSM)."],
+        "gsm": Annotated[str, "The sample (GSMxxxxx) whose file to download."],
+        "match": Annotated[
+            str, "Filename substring selecting exactly one file, e.g. '.rds'."
+        ],
+        "output_dir": Annotated[str, "Local directory to download the file into."],
+        "gunzip": Annotated[
+            bool, "Decompress a .gz payload after download. Default false (an .rds is not gzipped)."
+        ],
+    },
+)
+async def geo_fetch_file(args: dict[str, Any]) -> dict[str, Any]:
+    accession = str(args["accession"]).strip()
+    gsm = str(args["gsm"]).strip()
+    match = str(args["match"]).strip()
+    rr = commands.run_geo_fetch_file(
+        accession,
+        gsm,
+        match,
+        str(args["output_dir"]),
+        gunzip=bool(args.get("gunzip", False)),
+    )
+    return _report(rr, f"geo_fetch.py fetch {accession} --gsm {gsm} --match {match}")
+
+
+@tool(
     "rds_inspect",
     "Inspect an R .rds / .RData object (a Seurat, SingleCellExperiment, or "
     "SpatialExperiment) and return the SCHEMA only, via the rds2h5ad R backend. "
@@ -422,6 +461,7 @@ ALL_TOOLS = [
     cli_help,
     geo_manifest,
     geo_build,
+    geo_fetch_file,
     rds_inspect,
     rds_convert,
     run_preprocess,

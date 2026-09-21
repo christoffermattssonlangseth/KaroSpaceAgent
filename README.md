@@ -1,4 +1,8 @@
-# KaroSpaceAgent
+<p align="center">
+  <img src="app/karospace_agent/static/appicon.png" alt="KaroSpace Agent" width="120">
+</p>
+
+<h1 align="center">KaroSpaceAgent</h1>
 
 A standalone agent that builds a [KaroSpace](../KaroSpace) spatial-transcriptomics
 viewer from a raw `.h5ad` / SpatialData `.zarr` file.

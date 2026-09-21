@@ -43,3 +43,40 @@ decision behind the boundary where the researcher can't see it. The notebook is
 the honest home for that work. `run_preprocess` stays intentionally light: one
 sensible, reported, re-runnable default (leiden @ resolution 1.0), nothing that
 claims to be the final analysis.
+
+## R `.rds` inputs: convert, don't re-cluster
+
+A related gap is the *input format*. Much published spatial/single-cell analysis
+lives in R objects — Seurat / SingleCellExperiment / SpatialExperiment `.rds`
+files — which KaroSpace can't ingest. And crucially, when a GEO sample ships both
+a raw matrix and an analyzed `.rds` (e.g. a Xenium `*_final_*_object.rds`), the
+`.rds` is usually where the authors' *curated cell types, embeddings, and spatial
+coordinates* live. `geo_build` only pulls the raw matrix, so without a converter
+the agent would throw that analysis away and re-cluster from scratch with leiden.
+
+**`rds_inspect` / `rds_convert`** wrap the
+[`rds2h5ad`](https://github.com/christoffermattssonlangseth/RDStoH5AD) CLI (a
+Python front end over an R backend: R owns the S4/Seurat deserialization,
+`zellkonverter` writes the `.h5ad`, sparse stays sparse). Boundary: `rds2h5ad
+inspect` emits schema only — object type, assay/layer/reduced-dim *names*,
+cell/gene counts, `has_spatial` — no values, so it needs no example stripping; the
+conversion runs locally and the model sees only the written file's schema. It's an
+*optional* dependency (needs R + `zellkonverter`); when absent the tool says so and
+the agent falls back to the raw-matrix path.
+
+### Why "ask each time" when both a matrix and an `.rds` exist
+
+The two paths trade off and neither is universally right:
+
+- **raw matrix + `run_preprocess`** — light, no R dependency, but a de-novo leiden
+  that discards the authors' annotations;
+- **the analyzed `.rds`** — the authors' real cell types + UMAP + coordinates, but
+  a larger download and an R conversion.
+
+Which one a researcher wants is a per-dataset scientific call ("show me *their*
+bladder cell types" vs. "just get me a quick viewer"), not something the agent
+should decide silently. So the policy is to **surface both and let the user pick**;
+only when running one-shot with no one to ask does it default to the lighter
+raw-matrix path and say so. A converted `.rds` usually already carries
+annotations, so the clustering prep (§1b) is skipped, but the companion (§5) and
+normalization (§3) steps still apply.

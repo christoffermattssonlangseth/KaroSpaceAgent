@@ -54,6 +54,16 @@ def karospace_bin() -> str | None:
     return os.environ.get("KAROSPACE_BIN") or shutil.which("karospace")
 
 
+def rds2h5ad_bin() -> str | None:
+    """`rds2h5ad` from PATH, or RDS2H5AD_BIN if set.
+
+    The R-backed .rds -> .h5ad converter (separate `pip install rdstoh5ad`, which
+    also needs Rscript + zellkonverter). Like `karospace`, it's a standalone CLI on
+    PATH, not run through the scientific python — R owns the deserialization.
+    """
+    return os.environ.get("RDS2H5AD_BIN") or shutil.which("rds2h5ad")
+
+
 def companion_bin() -> str | None:
     """The Rust companion binary.
 
@@ -518,6 +528,67 @@ def run_gen_notebook(
     ]
     if not include_cellcharter:
         argv.append("--no-cellcharter")
+    return run(argv, timeout=timeout)
+
+
+def run_rds_inspect(input_path: str, assay: str = "", timeout: int = 600) -> RunResult:
+    """Run `rds2h5ad inspect` — schema-only probe of an .rds/.RData object.
+
+    Emits machine-readable JSON of NAMES and COUNTS only: object type, selected +
+    available assays, layer names, reduced-dim (embedding) names, cell/gene counts,
+    and a has_spatial boolean — no data values, so like inspect_structure it needs
+    no example stripping. Reading a large R object is not instant; `stream=False`
+    keeps it off the console for parity with the other inspection probes.
+    """
+    binp = rds2h5ad_bin()
+    if binp is None:
+        return RunResult(
+            127, "",
+            "rds2h5ad not found on PATH. Install it (pip install rdstoh5ad; needs "
+            "Rscript + zellkonverter) or set RDS2H5AD_BIN.",
+        )
+    argv = [binp, "inspect", input_path]
+    if assay:
+        argv += ["--assay", assay]
+    return run(argv, timeout=timeout, stream=False)
+
+
+def run_rds_convert(
+    input_path: str,
+    output: str,
+    assay: str = "",
+    x_layer: str = "",
+    layers: list[str] | None = None,
+    reduced_dims: list[str] | None = None,
+    no_spatial: bool = False,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run `rds2h5ad convert` — R-backed .rds/.RData -> .h5ad, written locally.
+
+    Long-running on large objects (a Xenium `_final_xenium_object.rds` can be
+    hundreds of MB), so it streams progress to the console like an export. The R
+    backend keeps sparse matrices sparse and lets zellkonverter own the .h5ad
+    layout. The model receives only the captured, truncated summary (paths + the
+    schema of what was written).
+    """
+    binp = rds2h5ad_bin()
+    if binp is None:
+        return RunResult(
+            127, "",
+            "rds2h5ad not found on PATH. Install it (pip install rdstoh5ad; needs "
+            "Rscript + zellkonverter) or set RDS2H5AD_BIN.",
+        )
+    argv = [binp, "convert", input_path, output]
+    if assay:
+        argv += ["--assay", assay]
+    if x_layer:
+        argv += ["--x-layer", x_layer]
+    if layers:
+        argv += ["--layers", ",".join(layers)]
+    if reduced_dims:
+        argv += ["--reduced-dims", ",".join(reduced_dims)]
+    if no_spatial:
+        argv.append("--no-spatial")
     return run(argv, timeout=timeout)
 
 

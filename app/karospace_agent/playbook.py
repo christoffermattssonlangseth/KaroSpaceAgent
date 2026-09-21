@@ -36,7 +36,7 @@ runs locally through the tools."""
 # --- Toolbox: the same tools, grouped by the stage that uses them ----------
 #
 # A flat list makes the model hunt; grouping by pipeline stage puts the right
-# tool next to the step that calls for it. At ten tools this orientation is all
+# tool next to the step that calls for it. At this size this orientation is all
 # the "retrieval" that is warranted — the whole set fits in view, so grouping,
 # not embedding-ranked lookup, is the honest right-sized design.
 
@@ -48,6 +48,8 @@ for it.
 
 Acquire  — geo_manifest      list a GEO accession's samples/files/platform (public metadata).
            geo_build         download only the matrix members of chosen samples -> local .h5ad.
+           rds_inspect       schema of an R .rds/.RData object (Seurat/SCE): assays, layers, embeddings, has_spatial.
+           rds_convert       convert an .rds/.RData -> .h5ad (R backend) to keep the authors' annotations/embeddings.
 Inspect  — inspect_input     sanitized obs/feature metadata for a file. ALWAYS call first.
            inspect_structure X dtype + is-integer, layers, obsm, obsp (graph present?).
            cli_help          verify a flag exists before using it. Never invent flags.
@@ -83,7 +85,34 @@ path, turn it into a local .h5ad first:
 - Then treat the written .h5ad as the input and continue from §0 below. A
   fresh geo_build file has raw-counts X, no spatial graph, and NO obs annotations
   (no cell_type / cluster columns) — so §1b (run_preprocess to create obs['leiden']),
-  §5 (companion) and §3 (LogNormalize / counts layer) all apply as usual."""
+  §5 (companion) and §3 (LogNormalize / counts layer) all apply as usual.
+- WATCH the manifest for an analyzed object among the supplementary files — an
+  R .rds/.RData (e.g. a Xenium '*_final_*_object.rds'), which typically holds the
+  authors' curated cell types + embeddings that the raw matrix lacks. geo_build
+  does NOT pull it. When both a raw matrix and such an .rds exist, that is the §0b
+  decision below — surface it to the user, don't silently pick.
+
+## 0b. Convert an R .rds / .RData object (Seurat / SingleCellExperiment)
+KaroSpace ingests .h5ad, not .rds. When the input is an R object — a file the
+user hands you directly, or an analyzed object sitting alongside a GEO sample's
+raw matrix — convert it first with the rds2h5ad R backend:
+- Call rds_inspect to read its schema (object type, available assays, layer and
+  reduced-dim NAMES, cell/gene counts, has_spatial). No values cross — same
+  boundary as inspect_input. Use it to see whether the object actually carries
+  annotations/embeddings worth keeping, and which --assay to export.
+- When a dataset offers BOTH a raw matrix (leiden from scratch, light, no R) AND
+  an analyzed .rds (the authors' real cell types + UMAP + coordinates, but a
+  larger download and an R conversion): do NOT choose silently. Lay out the two
+  paths and their trade-off and let the user pick per-dataset. One-shot with no
+  user to ask: default to the raw matrix + §1b (the lighter, dependency-free
+  path) and say so, noting the .rds alternative.
+- If they choose the .rds, call rds_convert (pick the assay from rds_inspect;
+  keep embeddings and spatial unless told otherwise) to write a .h5ad, then treat
+  that as the input and continue from §0. Such a file usually already carries
+  annotations, so §1b is skipped — but still run §5 (companion) and set §3
+  normalization from the structure probe as usual.
+- rds2h5ad needs R + zellkonverter locally; if it's missing the tool says so —
+  relay that and fall back to the raw-matrix path rather than failing the job."""
 
 # --- Stage: Inspect (single-section trap + read the schema) ----------------
 

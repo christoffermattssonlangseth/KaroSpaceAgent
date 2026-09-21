@@ -1,6 +1,6 @@
 ---
 name: build-karospace-viewer
-description: Build a KaroSpace HTML viewer from a raw .h5ad / SpatialData .zarr — or from a GEO accession. Use when the user wants to create, generate, or export a KaroSpace spatial-transcriptomics viewer, hands you a spatial dataset, or gives a GEO accession to visualize. Can acquire data from GEO, cluster an un-annotated matrix (leiden) or hand off heavier prep (CellCharter) as a notebook, inspects the data, chooses correct export flags, optionally runs the companion pre-processor, runs the export, and validates the result.
+description: Build a KaroSpace HTML viewer from a raw .h5ad / SpatialData .zarr, an R .rds/.RData object (Seurat / SingleCellExperiment), or a GEO accession. Use when the user wants to create, generate, or export a KaroSpace spatial-transcriptomics viewer, hands you a spatial dataset, or gives a GEO accession to visualize. Can acquire data from GEO, convert an .rds to .h5ad (rds2h5ad), cluster an un-annotated matrix (leiden) or hand off heavier prep (CellCharter) as a notebook, inspects the data, chooses correct export flags, optionally runs the companion pre-processor, runs the export, and validates the result.
 ---
 
 # Build a KaroSpace viewer
@@ -53,6 +53,46 @@ retrying blindly. The download and assembly run locally; only catalogue metadata
 crosses. A fresh build has raw-counts X, no spatial graph, and **no obs
 annotations** — so §1b (cluster it) and §5 (companion) both apply. Then continue
 from §0.
+
+**Watch for an analyzed `.rds` in the manifest.** Many GEO samples ship a raw
+matrix *and* an R object (e.g. a Xenium `*_final_*_object.rds`) that holds the
+authors' curated cell types + embeddings the raw matrix lacks. `geo_build` does
+not pull it. When both exist, that's the §0b decision — surface it, don't silently
+pick.
+
+### 0b. Convert an R `.rds` / `.RData` object (Seurat / SingleCellExperiment)
+
+KaroSpace ingests `.h5ad`, not `.rds`. When the input is an R object — handed to
+you directly, or an analyzed object next to a GEO sample's raw matrix — convert it
+first with the [`rds2h5ad`](https://github.com/christoffermattssonlangseth/RDStoH5AD)
+R backend (needs R + `zellkonverter`; `pip install rdstoh5ad`). Inspect its schema
+first — object type, assay/layer/reduced-dim **names**, cell/gene counts,
+`has_spatial` — no values cross:
+
+```bash
+rds2h5ad inspect /path/GSM10012265_final_xenium_object.rds
+```
+
+**When a dataset offers both a raw matrix and an analyzed `.rds`, don't choose
+silently** — the two paths trade off:
+
+- *raw matrix + §1b* — light, no R dependency, but a de-novo leiden that discards
+  the authors' cell types;
+- *the `.rds`* — the authors' real annotations + UMAP + coordinates, but a larger
+  download and an R conversion.
+
+Lay both out and let the user pick. Then convert the chosen assay (keep embeddings
+and spatial unless told otherwise):
+
+```bash
+rds2h5ad convert /path/GSM10012265_final_xenium_object.rds \
+  /path/GSM10012265_bladder.h5ad --assay RNA
+```
+
+Treat the written `.h5ad` as the input and continue from §0. It usually already
+carries annotations, so **skip §1b**, but still run §5 (companion) and set §3
+normalization from the structure probe. If `rds2h5ad` isn't installed, say so and
+fall back to the raw-matrix path rather than failing.
 
 ### 0. Is this the right file? (single-section trap)
 

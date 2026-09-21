@@ -174,6 +174,73 @@ async def geo_build(args: dict[str, Any]) -> dict[str, Any]:
     return _report(rr, f"geo_fetch.py build {accession} --platform {platform}")
 
 
+@tool(
+    "rds_inspect",
+    "Inspect an R .rds / .RData object (a Seurat, SingleCellExperiment, or "
+    "SpatialExperiment) and return the SCHEMA only, via the rds2h5ad R backend. "
+    "Emits names and counts: object type, the selected + available assays, layer "
+    "names, reduced-dim (embedding) names, cell and gene counts, and a has_spatial "
+    "flag — NO data values, so it needs no example stripping. Use this to decide "
+    "whether an analyzed .rds is worth converting (e.g. a GEO Xenium "
+    "'*_final_*_object.rds' usually carries the authors' curated cell-type "
+    "annotations + UMAP + coordinates that the raw matrix lacks) and which --assay "
+    "to convert. Requires rds2h5ad on PATH (R + zellkonverter).",
+    {
+        "input_path": Annotated[str, "Path to the .rds or .RData file."],
+        "assay": Annotated[
+            str, "Assay to inspect. '' lets the backend choose a default."
+        ],
+    },
+)
+async def rds_inspect(args: dict[str, Any]) -> dict[str, Any]:
+    assay = (args.get("assay") or "").strip()
+    rr = commands.run_rds_inspect(str(args["input_path"]), assay=assay)
+    return _report(rr, f"rds2h5ad inspect {args['input_path']}")
+
+
+@tool(
+    "rds_convert",
+    "Convert an R .rds / .RData object to a KaroSpace-ingestible .h5ad, via the "
+    "rds2h5ad R backend (R owns the Seurat/SingleCellExperiment deserialization; "
+    "zellkonverter writes the .h5ad; sparse matrices stay sparse). Use this when "
+    "the analyzed object carries annotations/embeddings the raw matrix doesn't — "
+    "e.g. prefer a GEO sample's '*_final_*_object.rds' over the bare "
+    "cell_feature_matrix when the goal is the authors' published cell types rather "
+    "than a fresh leiden. Call rds_inspect first to choose the assay. The heavy "
+    "read + write runs LOCALLY; the model receives only the summary (paths + the "
+    "schema of what was written). After it finishes, run inspect_input / "
+    "inspect_structure on the output and continue the normal build. It can be slow "
+    "on large objects (hundreds of MB).",
+    {
+        "input_path": Annotated[str, "Path to the input .rds / .RData."],
+        "output": Annotated[str, "Output .h5ad path."],
+        "assay": Annotated[
+            str, "Assay to export (e.g. 'RNA', 'SCT'). '' = backend default."
+        ],
+        "x_layer": Annotated[
+            str, "Layer/assay to map to AnnData X (e.g. 'counts', 'data'). '' = default."
+        ],
+        "reduced_dims": Annotated[
+            list, "Embeddings to export (e.g. ['pca','umap']). Empty = all available."
+        ],
+        "no_spatial": Annotated[
+            bool, "Skip inferred spatial coordinates in obsm. Default false (keep them)."
+        ],
+    },
+)
+async def rds_convert(args: dict[str, Any]) -> dict[str, Any]:
+    reduced = [str(r).strip() for r in args.get("reduced_dims", []) if str(r).strip()]
+    rr = commands.run_rds_convert(
+        str(args["input_path"]),
+        str(args["output"]),
+        assay=(args.get("assay") or "").strip(),
+        x_layer=(args.get("x_layer") or "").strip(),
+        reduced_dims=reduced,
+        no_spatial=bool(args.get("no_spatial", False)),
+    )
+    return _report(rr, f"rds2h5ad convert {args['input_path']} -> {args['output']}")
+
+
 # --- Pre-processing -------------------------------------------------------
 
 @tool(
@@ -355,6 +422,8 @@ ALL_TOOLS = [
     cli_help,
     geo_manifest,
     geo_build,
+    rds_inspect,
+    rds_convert,
     run_preprocess,
     generate_notebook,
     merge_sections,

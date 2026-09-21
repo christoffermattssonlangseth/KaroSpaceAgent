@@ -366,6 +366,38 @@
   let lines = 0, lastAssistant = null;
   const MAX_LOG_LINES = 5000;
 
+  // Proof-of-life while the agent works. The model can go quiet for minutes —
+  // reasoning over a big companion result, or waiting on karospace to load the
+  // data before its first progress line — with nothing new on screen. A ticking
+  // elapsed clock (plus the current step's name) shows it's still going rather
+  // than stuck. Client-side only: no data crosses, it's just the wall clock.
+  let workStart = null, workTimer = null, activity = "";
+  const ACTIVITY = {
+    inspect_input: "Inspecting", cli_help: null,
+    merge_sections: "Merging sections", run_companion: "Pre-processing",
+    run_export: "Exporting viewer", package_sidecar: "Packaging",
+    validate_output: "Validating",
+    geo_manifest: "Reading GEO", geo_build: "Fetching dataset",
+    geo_fetch_file: "Downloading", rds_inspect: "Inspecting R object",
+    rds_convert: "Converting R object",
+  };
+  function fmtElapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+  function renderWorking() {
+    if (workStart == null) return;
+    const t = fmtElapsed(Date.now() - workStart);
+    statusText.textContent = (activity ? activity + " · " : "working… ") + t;
+  }
+  function setActivity(toolText) {
+    // "mcp__karospace__run_companion(args…)" -> "run_companion" -> a label.
+    const name = (toolText || "").split("(")[0].trim().split("__").pop();
+    if (name in ACTIVITY) {          // known step; null means "don't relabel"
+      if (ACTIVITY[name] !== null) { activity = ACTIVITY[name]; renderWorking(); }
+    }
+  }
+
   // Theme: default from stored choice, else system preference. Toggle with the
   // header button or the `T` key, mirroring the KaroSpace viewer.
   const root = document.documentElement;
@@ -476,10 +508,18 @@
 
   function setState(state) {
     status.className = state;
-    statusText.textContent = ({
-      idle: "idle", working: "working…", interrupting: "stopping…", offline: "disconnected",
-    })[state] || state;
     stopBtn.disabled = state !== "working";
+    if (state === "working") {
+      if (workStart == null) workStart = Date.now();   // one clock per turn
+      renderWorking();
+      if (!workTimer) workTimer = setInterval(renderWorking, 1000);
+      return;
+    }
+    if (workTimer) { clearInterval(workTimer); workTimer = null; }
+    workStart = null; activity = "";
+    statusText.textContent = ({
+      idle: "idle", interrupting: "stopping…", offline: "disconnected",
+    })[state] || state;
   }
 
   function addProgress(stream, line) {
@@ -554,7 +594,7 @@
           lastAssistant = addMessage("assistant", e.text, true);
         }
         break;
-      case "tool": lastAssistant = null; addMessage("tool", e.text); pipeline.onTool(e.text); break;
+      case "tool": lastAssistant = null; addMessage("tool", e.text); pipeline.onTool(e.text); setActivity(e.text); break;
       case "error": lastAssistant = null; addMessage("error", e.text); break;
       case "progress": addProgress(e.stream, e.line); break;
       case "status": setState(e.state); pipeline.onStatus(e.state); break;

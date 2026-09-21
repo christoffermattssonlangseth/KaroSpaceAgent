@@ -7,6 +7,16 @@ viewer from a raw `.h5ad` / SpatialData `.zarr` file.
 karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type"
 ```
 
+It can also **start from a public GEO accession** instead of a local file:
+`geo_manifest` lists a series' samples, files, and inferred platform, and
+`geo_build` downloads only the matrix members needed to construct the AnnData
+— for a Xenium sample it range-fetches `cell_feature_matrix.h5` + `cells.parquet`
+out of the multi-GB `outs.zip` rather than the whole archive — and writes a
+minimal `.h5ad` (raw counts + spatial coordinates) ready for the pipeline above.
+Xenium, Visium, and MERSCOPE/MERFISH (Vizgen) layouts are supported; other
+platforms report what an assembler would need. Only public GEO catalogue
+metadata crosses the boundary; the download and assembly run locally.
+
 It exists because getting from raw data to a good viewer means choosing ~30
 correct flags for a messy dataset — and *knowing which choices are right* takes
 some spatial-transcriptomics expertise. The agent supplies that judgement: it
@@ -50,8 +60,8 @@ values* that `karospace --inspect-input` prints. The agent reasons about your
 experiment from column names, types, and cardinalities alone.
 
 **How the boundary is enforced:** the app runs the model with all built-in tools
-disabled, so its only capabilities are seven sanitizing wrappers over the CLIs —
-it cannot read a raw file off disk, and `inspect_input` runs
+disabled, so its only capabilities are a small set of sanitizing wrappers over the
+CLIs — it cannot read a raw file off disk, and `inspect_input` runs
 `strip_inspect_examples` before returning anything. (The Claude Code surface,
 which has no such code layer, achieves the same by piping inspect through
 `sed 's/ examples:.*//'` so example values are stripped in-shell before any

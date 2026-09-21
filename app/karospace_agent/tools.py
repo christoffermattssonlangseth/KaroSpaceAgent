@@ -213,6 +213,49 @@ async def run_preprocess(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @tool(
+    "generate_notebook",
+    "Write a parameterized preprocessing NOTEBOOK the researcher runs themselves, "
+    "instead of clustering in-agent. Use this when the analysis is too heavy or "
+    "too scientific to run headless — chiefly CellCharter spatial-domain detection "
+    "(scvi-tools + torch, and a real choice of how many domains) — or when the "
+    "researcher wants to own the clustering. The notebook is templated from "
+    "schema-level params only (paths, the section-key column NAME, gene names, "
+    "numbers); it reads no data, so nothing crosses the boundary. It contains "
+    "normalize → leiden → (CellCharter spatial domains) → write annotated .h5ad, "
+    "and ends with the exact karospace-agent build command to feed the result "
+    "back. This is a HANDOFF: after writing it you cannot continue the build in "
+    "this session — tell the user to run it and return with the annotated file. "
+    "For the light, in-agent path (leiden only, no heavy deps) use run_preprocess "
+    "instead.",
+    {
+        "input_path": Annotated[str, "Raw .h5ad the notebook will load."],
+        "output": Annotated[str, "Notebook .ipynb path to write."],
+        "section_key": Annotated[
+            str, "obs column separating sections/samples (batch/library). '' if single section."
+        ],
+        "resolution": Annotated[float, "Leiden resolution. Default 1.0."],
+        "genes": Annotated[list, "Genes of interest to note (informational). May be empty."],
+        "organism": Annotated[str, "'Human' or 'Mouse'."],
+        "include_cellcharter": Annotated[
+            bool, "Include the CellCharter spatial-domain cells. Default true."
+        ],
+    },
+)
+async def generate_notebook(args: dict[str, Any]) -> dict[str, Any]:
+    genes = [str(g).strip() for g in args.get("genes", []) if str(g).strip()]
+    rr = commands.run_gen_notebook(
+        str(args["input_path"]),
+        str(args["output"]),
+        section_key=(args.get("section_key") or "").strip(),
+        resolution=float(args.get("resolution") or 1.0),
+        genes=genes,
+        organism=(args.get("organism") or "Human").strip() or "Human",
+        include_cellcharter=bool(args.get("include_cellcharter", True)),
+    )
+    return _report(rr, f"gen_notebook.py {args['input_path']} -> {args['output']}")
+
+
+@tool(
     "merge_sections",
     "Merge per-section .h5ad files into one KaroSpace-ready file, adding "
     "sample_id / condition / sample_batch. Use when the input is a single "
@@ -313,6 +356,7 @@ ALL_TOOLS = [
     geo_manifest,
     geo_build,
     run_preprocess,
+    generate_notebook,
     merge_sections,
     run_companion,
     run_export,

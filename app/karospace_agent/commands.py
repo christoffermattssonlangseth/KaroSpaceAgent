@@ -30,6 +30,7 @@ MERGE_SCRIPT = REPO_ROOT / "scripts" / "merge_sections.py"
 STRUCTURE_SCRIPT = REPO_ROOT / "scripts" / "inspect_structure.py"
 GEO_SCRIPT = REPO_ROOT / "scripts" / "geo_fetch.py"
 PREPROCESS_SCRIPT = REPO_ROOT / "scripts" / "preprocess.py"
+GEN_NOTEBOOK_SCRIPT = REPO_ROOT / "scripts" / "gen_notebook.py"
 
 # Default timeout for a full export (analytics + DE + pathway can be minutes on
 # large data). Override with KAROSPACE_AGENT_TIMEOUT (seconds).
@@ -487,6 +488,36 @@ def run_preprocess(
         "--n-hvg", str(n_hvg),
         "--key", key,
     ]
+    return run(argv, timeout=timeout)
+
+
+def run_gen_notebook(
+    input_path: str,
+    output: str,
+    section_key: str = "",
+    resolution: float = 1.0,
+    genes: list[str] | None = None,
+    organism: str = "Human",
+    include_cellcharter: bool = True,
+    timeout: int = 120,
+) -> RunResult:
+    """Run scripts/gen_notebook.py — write a preprocessing notebook.
+
+    Pure templating from schema-level params (it reads no data), so it is quick
+    and safe; runs under the shared interpreter for consistency with the other
+    scripts. The model receives only the 'wrote notebook: …' summary line.
+    """
+    if not GEN_NOTEBOOK_SCRIPT.exists():
+        return RunResult(127, "", f"notebook script missing: {GEN_NOTEBOOK_SCRIPT}")
+    argv = [
+        merge_python(), str(GEN_NOTEBOOK_SCRIPT), input_path, "-o", output,
+        "--section-key", section_key,
+        "--resolution", str(resolution),
+        "--genes", ",".join(genes or []),
+        "--organism", organism,
+    ]
+    if not include_cellcharter:
+        argv.append("--no-cellcharter")
     return run(argv, timeout=timeout)
 
 

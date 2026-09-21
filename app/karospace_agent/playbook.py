@@ -52,6 +52,7 @@ Inspect  — inspect_input     sanitized obs/feature metadata for a file. ALWAYS
            inspect_structure X dtype + is-integer, layers, obsm, obsp (graph present?).
            cli_help          verify a flag exists before using it. Never invent flags.
 Prepare  — run_preprocess    add a leiden clustering when a raw file has no annotations (writes obs['leiden']).
+           generate_notebook  hand off heavier prep (CellCharter spatial domains) as a notebook the researcher runs.
            merge_sections    merge per-section files that lack sample metadata.
 Enrich   — run_companion      pre-process (spatial graph / analytics) before export.
 Export   — run_export        run the export; read its exit code + errors and iterate.
@@ -127,8 +128,17 @@ scientific choice, not a fact: run_preprocess uses a default (1.0) and reports t
 cluster count — if the user wants finer/coarser structure, re-run at a different
 resolution rather than treating the first pass as ground truth. Skip this step
 entirely when the file already carries annotations (most researcher-supplied
-files do). Deeper spatial-domain methods (e.g. CellCharter) are out of scope for
-this tool — offer a generated notebook for those instead."""
+files do).
+
+For deeper spatial-domain detection (CellCharter) or when the researcher wants to
+own the clustering, use generate_notebook instead of run_preprocess: it writes a
+parameterized notebook (normalize → leiden → CellCharter → annotated .h5ad) they
+run on their own machine/GPU. That is a HANDOFF — the heavy compute and the
+biological choice of domain count stay with the researcher, and you cannot
+continue the build in this session. After writing the notebook, tell the user to
+run it and come back with the annotated file; then resume from §0. Choose
+run_preprocess for "just make me a viewer", generate_notebook for "I want to run
+CellCharter / own the analysis"."""
 
 # --- Stage: Design (core flags + statistics/normalization) -----------------
 

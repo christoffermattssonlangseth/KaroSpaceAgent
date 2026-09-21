@@ -24,7 +24,10 @@ inspects the data's metadata, reasons about the right parameters (which column i
 the section key, which is the main annotation, whether pseudobulk makes sense for
 the experimental design, …), optionally enriches the file with
 [KaroSpaceCompanion](../KaroSpaceCompanion), runs the export, reads errors and
-iterates, and validates the result.
+iterates, validates the result, and runs a schema-only self-review of its own
+flag choices — the known traps (a placeholder section key, an un-exposed
+annotation, doubly-normalized coloring, a skipped neighbor graph) — before it
+reports success.
 
 This is complementary to
 [KaroSpaceBuilder](https://github.com/christoffermattssonlangseth/KaroSpaceBuilder),
@@ -173,6 +176,8 @@ loop from a chat with zero infrastructure:
 
 - **Skill** `build-karospace-viewer` — the parameter-selection playbook.
 - **Subagent** `karospace-viewer-builder` — runs the loop end-to-end.
+- **Subagent** `karospace-viewer-reviewer` — a schema-only second pass that checks
+  the chosen flags against the known failure modes before you ship.
 
 ```
 /build-karospace-viewer  ~/data/my_xenium.h5ad "grid by sample, colour by cell_type, focus on Cd4/Cd8a/Gfap"

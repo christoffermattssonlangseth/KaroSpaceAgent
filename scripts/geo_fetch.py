@@ -19,6 +19,12 @@ the morphology OME-TIFFs — the bulk of the archive — are never transferred.
 The 31 GB series `RAW.tar` is likewise avoided: every file is also mirrored
 per-sample under geo/samples/GSMnnnNNN/GSMXXXXX/suppl/.
 
+Some records skip the outs.zip and post the same files individually as loose
+supplementary files (`*_cell_feature_matrix.h5`, `*_cells.parquet` /
+`*_cells_stats.csv.gz`, plus the multi-GB `*_morphology.ome.tif.gz` and
+`*_transcripts.parquet.gz` we don't want). `build_xenium` detects this — no
+outs.zip present — and downloads just the two small files directly instead.
+
 Data-handling boundary
 ----------------------
 `manifest` emits only PUBLIC GEO catalogue facts (study title/summary, sample
@@ -111,7 +117,12 @@ def _sample_files(gsm_record: dict[str, list[str]]) -> list[str]:
 
 def infer_platform(filenames: list[str], instrument: str) -> str:
     joined = " ".join(filenames).lower() + " " + instrument.lower()
-    if "xenium" in joined or "_outs.zip" in joined:
+    # Xenium: the name/instrument, the outs.zip bundle, or — when files are posted
+    # flat — the distinctive Xenium member names (cell_feature_matrix.h5 is Xenium,
+    # not the feature_bc_matrix that Chromium/Visium use; morphology.ome.tif and
+    # cells_stats are Xenium too). Checked before Chromium so it wins.
+    if ("xenium" in joined or "_outs.zip" in joined or "cell_feature_matrix" in joined
+            or "morphology.ome.tif" in joined or "cells_stats" in joined):
         return "xenium"
     if "cell_by_gene" in joined or "cell_metadata" in joined or "merscope" in joined or "merfish" in joined or "vizgen" in joined:
         return "merscope"
@@ -384,23 +395,16 @@ def _sanitize_obs(obs_df):
     return out
 
 
-def _assemble_xenium_sample(gsm: str, url: str, cache: Path, include_control: bool, log: list[str]):
-    """Pull the two matrix members from a GSM's outs.zip and build one AnnData."""
+def _assemble_xenium_from_paths(gsm: str, matrix_h5: Path, cells_path: Path,
+                                include_control: bool, log: list[str]):
+    """Build one AnnData from an already-downloaded matrix .h5 + per-cell table.
+
+    Shared core for both layouts a GEO Xenium sample can arrive in: members
+    range-pulled from an outs.zip, or loose flat supplementary files."""
     import anndata as ad
     import numpy as np
 
-    sample_cache = cache / gsm
-    log.append(f"{gsm}: xenium")
-    members = _pull_zip_members(
-        url, ["cell_feature_matrix.h5", "cells.parquet", "cells.csv.gz"], sample_cache, log
-    )
-    if "cell_feature_matrix.h5" not in members:
-        raise ValueError(f"{gsm}: cell_feature_matrix.h5 not found in {url.rsplit('/', 1)[-1]}")
-    cells_path = members.get("cells.parquet") or members.get("cells.csv.gz")
-    if cells_path is None:
-        raise ValueError(f"{gsm}: neither cells.parquet nor cells.csv.gz found")
-
-    X, var, barcodes = _load_matrix(members["cell_feature_matrix.h5"])
+    X, var, barcodes = _load_matrix(matrix_h5)
     cells = _read_cells(cells_path).set_index("cell_id").reindex(barcodes)
     obs = _finish_obs(cells, gsm)
 
@@ -413,6 +417,51 @@ def _assemble_xenium_sample(gsm: str, url: str, cache: Path, include_control: bo
         a.obsm["spatial"] = obs[["x_centroid", "y_centroid"]].to_numpy(np.float32)
     log.append(f"  assembled: {a.n_obs} cells x {a.n_vars} genes")
     return a
+
+
+def _assemble_xenium_sample_zip(gsm: str, url: str, cache: Path, include_control: bool, log: list[str]):
+    """Pull the two matrix members from a GSM's outs.zip and build one AnnData."""
+    sample_cache = cache / gsm
+    log.append(f"{gsm}: xenium (from outs.zip)")
+    members = _pull_zip_members(
+        url, ["cell_feature_matrix.h5", "cells.parquet", "cells.csv.gz"], sample_cache, log
+    )
+    if "cell_feature_matrix.h5" not in members:
+        raise ValueError(f"{gsm}: cell_feature_matrix.h5 not found in {url.rsplit('/', 1)[-1]}")
+    cells_path = members.get("cells.parquet") or members.get("cells.csv.gz")
+    if cells_path is None:
+        raise ValueError(f"{gsm}: neither cells.parquet nor cells.csv.gz found")
+    return _assemble_xenium_from_paths(gsm, members["cell_feature_matrix.h5"], cells_path,
+                                       include_control, log)
+
+
+def _fetch_xenium_cells_flat(sample: dict, cache: Path, log: list[str]) -> Path:
+    """The loose per-cell table for a flat sample: cells.parquet or cells*.csv[.gz].
+
+    GEO submitters name it variously — cells.parquet, cells.csv.gz, or the XOA
+    summary cells_stats.csv.gz — so match on 'cells' (which the matrix,
+    cell_feature_matrix.h5, does NOT contain) plus the extension, parquet first."""
+    for subs in (("cells", ".parquet"), ("cells", ".csv")):
+        if _find_file(sample, *subs) is not None:
+            return _fetch_file(sample, cache, log, *subs, role="cell metadata")
+    names = ", ".join(f["name"] for f in sample["files"]) or "(none)"
+    raise ValueError(
+        f"{sample['gsm']}: no per-cell table (cells.parquet / cells*.csv[.gz]) among the "
+        f"flat supplementary files. Files present: {names}")
+
+
+def _assemble_xenium_sample_flat(sample: dict, cache: Path, include_control: bool, log: list[str]):
+    """Assemble a Xenium sample whose files are posted individually (no outs.zip).
+
+    Some GEO records upload cell_feature_matrix.h5 and the per-cell table as loose
+    supplementary files rather than a single outs.zip bundle. Both are small
+    (a few MB each) — pull them directly; the multi-GB morphology image and the
+    transcripts table are simply never among the files we ask for."""
+    gsm = sample["gsm"]
+    log.append(f"{gsm}: xenium (from flat supplementary files)")
+    matrix = _fetch_file(sample, cache, log, "cell_feature_matrix", ".h5", role="expression matrix")
+    cells_path = _fetch_xenium_cells_flat(sample, cache, log)
+    return _assemble_xenium_from_paths(gsm, matrix, cells_path, include_control, log)
 
 
 def _finish_obs(obs, gsm: str):
@@ -443,21 +492,16 @@ def _xenium_outs_url(sample: dict) -> str | None:
 
 
 def build_xenium(samples: list[dict], cache: Path, include_control: bool, log: list[str]):
-    adatas = [
-        _assemble_xenium_sample(s["gsm"], _require_outs(s), cache, include_control, log)
-        for s in samples
-    ]
+    """Assemble each Xenium sample from whichever layout GEO used: an outs.zip
+    bundle (range-pull two members) or loose flat supplementary files."""
+    adatas = []
+    for s in samples:
+        url = _xenium_outs_url(s)
+        if url is not None:
+            adatas.append(_assemble_xenium_sample_zip(s["gsm"], url, cache, include_control, log))
+        else:
+            adatas.append(_assemble_xenium_sample_flat(s, cache, include_control, log))
     return _concat(adatas, samples, log)
-
-
-def _require_outs(sample: dict) -> str:
-    url = _xenium_outs_url(sample)
-    if url is None:
-        names = ", ".join(f["name"] for f in sample["files"]) or "(none)"
-        raise ValueError(
-            f"{sample['gsm']}: no *_outs.zip on the GEO record. Files present: {names}"
-        )
-    return url
 
 
 # --- visium assembler ------------------------------------------------------

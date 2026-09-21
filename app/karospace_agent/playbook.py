@@ -80,9 +80,13 @@ path, turn it into a local .h5ad first:
   path. Supported platforms: xenium, visium, merscope. It pulls only the matrix
   members (for Xenium, out of the multi-GB outs.zip via range requests — never
   the transcripts table or images) and writes raw counts in X + coordinates in
-  obsm['spatial']. For an unsupported platform or an unfamiliar file layout it
-  fails LOUDLY, naming what it found — relay that to the user rather than
-  retrying blindly (they may need to supply the file another way).
+  obsm['spatial']. It handles BOTH Xenium layouts automatically: the outs.zip
+  bundle, and records that post the files loose (individual
+  *_cell_feature_matrix.h5 + *_cells*.csv/parquet) instead — in that case it just
+  downloads the two small flat files directly. So do NOT tell the user a flat /
+  no-outs.zip layout needs a manual download; call geo_build, it assembles them.
+  For an unsupported platform or a genuinely unfamiliar layout it fails LOUDLY,
+  naming what it found — relay that rather than retrying blindly.
 - Then treat the written .h5ad as the input and continue from §0 below. A
   fresh geo_build file has raw-counts X, no spatial graph, and NO obs annotations
   (no cell_type / cluster columns) — so §1b (run_preprocess to create obs['leiden']),

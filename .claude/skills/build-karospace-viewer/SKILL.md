@@ -47,12 +47,17 @@ python scripts/geo_fetch.py build GSE243168 \
   --platform xenium --gsm GSM7782698 -o /path/GSE243168_xenium.h5ad
 ```
 
-Supported platforms: `xenium`, `visium`, `merscope`. An unsupported platform or an
-unfamiliar layout fails **loudly**, naming what it found — relay that rather than
-retrying blindly. The download and assembly run locally; only catalogue metadata
-crosses. A fresh build has raw-counts X, no spatial graph, and **no obs
-annotations** — so §1b (cluster it) and §5 (companion) both apply. Then continue
-from §0.
+Supported platforms: `xenium`, `visium`, `merscope`. For Xenium it handles **both
+layouts automatically**: the `_outs.zip` bundle (range-pulls two members) and
+records that post the files **loose** (individual `*_cell_feature_matrix.h5` +
+`*_cells*.csv/parquet`, no outs.zip) — it downloads the two small flat files
+directly. So don't tell the user a flat / no-outs.zip layout needs a manual
+download; just call `geo_build`. A genuinely unsupported platform or unfamiliar
+layout fails **loudly**, naming what it found — relay that rather than retrying
+blindly. The download and assembly run locally; only catalogue metadata crosses.
+A fresh build has raw-counts X, no spatial graph, and often **no obs
+annotations** — so §1b (cluster it, if none exist) and §5 (companion) apply. Then
+continue from §0.
 
 **Watch for an analyzed `.rds` in the manifest.** Many GEO samples ship a raw
 matrix *and* an R object (e.g. a Xenium `*_final_*_object.rds`) that holds the

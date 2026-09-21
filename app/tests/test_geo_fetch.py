@@ -31,6 +31,11 @@ def test_infer_platform_from_filenames():
     assert geo.infer_platform(["binned_outputs.tar"], "") == "visium_hd"
     assert geo.infer_platform(["sample_filtered_feature_bc_matrix.h5"], "Chromium") == "chromium"
     assert geo.infer_platform(["readme.txt"], "") == "unknown"
+    # Flat Xenium (no outs.zip, no "xenium" in the name): the member names give it
+    # away — and cell_feature_matrix must win over Chromium's feature_bc_matrix.
+    assert geo.infer_platform(
+        ["GSM_cell_feature_matrix.h5", "GSM_cells_stats.csv.gz", "GSM_morphology.ome.tif.gz"], ""
+    ) == "xenium"
 
 
 def test_all_three_assemblers_registered():
@@ -78,6 +83,51 @@ def test_xenium_outs_url_picks_the_bundle():
     ]}
     assert geo._xenium_outs_url(sample) == "https://h/outs"
     assert geo._xenium_outs_url({"files": [{"name": "x.tif", "url": "u"}]}) is None
+
+
+def test_build_xenium_routes_by_layout(monkeypatch, tmp_path):
+    routed = []
+    monkeypatch.setattr(geo, "_assemble_xenium_sample_zip",
+                        lambda gsm, url, c, ic, log: routed.append(("zip", gsm)))
+    monkeypatch.setattr(geo, "_assemble_xenium_sample_flat",
+                        lambda s, c, ic, log: routed.append(("flat", s["gsm"])))
+    monkeypatch.setattr(geo, "_concat", lambda adatas, samples, log: adatas)
+
+    zipped = {"gsm": "GSMz", "files": [{"name": "GSMz_outs.zip", "url": "u"}]}
+    flat = {"gsm": "GSMf", "files": [
+        {"name": "GSMf_cell_feature_matrix.h5", "url": "u1"},
+        {"name": "GSMf_cells_stats.csv.gz", "url": "u2"},
+    ]}
+    geo.build_xenium([zipped, flat], tmp_path, False, [])
+    assert routed == [("zip", "GSMz"), ("flat", "GSMf")]
+
+
+def test_fetch_xenium_cells_flat_prefers_parquet_then_csv(monkeypatch, tmp_path):
+    got = {}
+    monkeypatch.setattr(geo, "_fetch_file",
+                        lambda sample, cache, log, *subs, role="": got.__setitem__("subs", subs) or (cache / "cells"))
+
+    csv_only = {"gsm": "GSM1", "files": [{"name": "GSM1_cells_stats.csv.gz", "url": "u"}]}
+    geo._fetch_xenium_cells_flat(csv_only, tmp_path, [])
+    assert got["subs"] == ("cells", ".csv")
+
+    with_parquet = {"gsm": "GSM1", "files": [
+        {"name": "GSM1_cells.parquet", "url": "u1"},
+        {"name": "GSM1_cells_stats.csv.gz", "url": "u2"},
+    ]}
+    geo._fetch_xenium_cells_flat(with_parquet, tmp_path, [])
+    assert got["subs"] == ("cells", ".parquet")
+
+
+def test_fetch_xenium_cells_flat_raises_when_no_cell_table(tmp_path):
+    # Only the matrix present — the cells table is genuinely missing.
+    sample = {"gsm": "GSM1", "files": [{"name": "GSM1_cell_feature_matrix.h5", "url": "u"}]}
+    try:
+        geo._fetch_xenium_cells_flat(sample, tmp_path, [])
+        assert False, "expected a loud missing-cells failure"
+    except ValueError as e:
+        assert "per-cell table" in str(e)
+        assert "GSM1_cell_feature_matrix.h5" in str(e)  # tells you what WAS there
 
 
 def test_format_manifest_shows_platform_files_and_build_hint():

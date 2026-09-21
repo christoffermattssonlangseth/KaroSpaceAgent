@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KaroSpace Agent</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20x='2.5'%20y='3.5'%20width='27'%20height='25'%20rx='5'%20fill='%23fffafd'%20stroke='%23870052'%20stroke-width='2'/%3E%3Cline%20x1='2.5'%20y1='10'%20x2='29.5'%20y2='10'%20stroke='%23870052'%20stroke-width='1.5'%20opacity='.5'/%3E%3Ccircle%20cx='6.5'%20cy='7'%20r='1.2'%20fill='%23870052'/%3E%3Ccircle%20cx='10.3'%20cy='7'%20r='1.2'%20fill='%23FF876F'/%3E%3Cg%20stroke='%23870052'%20stroke-width='1.1'%20opacity='.55'%3E%3Cline%20x1='9'%20y1='16'%20x2='16'%20y2='14'/%3E%3Cline%20x1='16'%20y1='14'%20x2='23'%20y2='17'/%3E%3Cline%20x1='9'%20y1='16'%20x2='13'%20y2='23'/%3E%3Cline%20x1='16'%20y1='14'%20x2='13'%20y2='23'/%3E%3Cline%20x1='23'%20y1='17'%20x2='21'%20y2='23'/%3E%3Cline%20x1='13'%20y1='23'%20x2='21'%20y2='23'/%3E%3C/g%3E%3Ccircle%20cx='9'%20cy='16'%20r='2.1'%20fill='%23870052'/%3E%3Ccircle%20cx='16'%20cy='14'%20r='2.1'%20fill='%23FF876F'/%3E%3Ccircle%20cx='23'%20cy='17'%20r='2.1'%20fill='%23870052'/%3E%3Ccircle%20cx='13'%20cy='23'%20r='2.1'%20fill='%23FF876F'/%3E%3Ccircle%20cx='21'%20cy='23'%20r='2.1'%20fill='%23870052'/%3E%3C/svg%3E">
 <style>
   /* Design tokens lifted from the KaroSpace viewer (exporter.py :root).
      Signature accent is Karolinska deep-plum #870052 with a warm-coral
@@ -95,7 +95,11 @@
     border-bottom: 1px solid var(--border-color);
     background: var(--header-wash), var(--header-bg);
   }
-  .brand { display: flex; align-items: baseline; gap: 8px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  /* Inline SVG mark: a viewer window holding a spatial neighbour graph — what
+     this agent actually builds. It reads the page's CSS vars, so it recolours
+     itself in dark mode with everything else. */
+  .brand .logo { flex: none; display: block; }
   .brand h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
   .brand .wordmark .k { color: var(--accent); }
   .brand .wordmark .s { color: var(--accent-warm); }
@@ -293,6 +297,29 @@
 <body>
 <header>
   <div class="brand">
+    <svg class="logo" width="30" height="30" viewBox="0 0 32 32" role="img" aria-label="KaroSpace Agent logo">
+      <!-- viewer window frame -->
+      <rect x="2.5" y="3.5" width="27" height="25" rx="4.5"
+            fill="var(--panel-card-bg)" stroke="var(--accent)" stroke-width="1.6"/>
+      <line x1="2.5" y1="10" x2="29.5" y2="10" stroke="var(--accent)" stroke-width="1.2" opacity="0.45"/>
+      <circle cx="6.5" cy="6.9" r="1.05" fill="var(--accent)"/>
+      <circle cx="10" cy="6.9" r="1.05" fill="var(--accent-warm)"/>
+      <circle cx="13.5" cy="6.9" r="1.05" fill="var(--accent)" opacity="0.5"/>
+      <!-- spatial neighbour graph inside the viewer -->
+      <g stroke="var(--accent)" stroke-width="1" opacity="0.5">
+        <line x1="9" y1="16" x2="16" y2="14"/>
+        <line x1="16" y1="14" x2="23" y2="17"/>
+        <line x1="9" y1="16" x2="13" y2="23"/>
+        <line x1="16" y1="14" x2="13" y2="23"/>
+        <line x1="23" y1="17" x2="21" y2="23"/>
+        <line x1="13" y1="23" x2="21" y2="23"/>
+      </g>
+      <circle cx="9" cy="16" r="1.9" fill="var(--accent)"/>
+      <circle cx="16" cy="14" r="1.9" fill="var(--accent-warm)"/>
+      <circle cx="23" cy="17" r="1.9" fill="var(--accent)"/>
+      <circle cx="13" cy="23" r="1.9" fill="var(--accent-warm)"/>
+      <circle cx="21" cy="23" r="1.9" fill="var(--accent)"/>
+    </svg>
     <h1><span class="wordmark"><span class="k">Karo</span><span class="s">Space</span></span> Agent</h1>
     <span class="kind">viewer builder</span>
   </div>

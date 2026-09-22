@@ -76,6 +76,27 @@ def test_successful_commands_do_not_forward_any_logs(name):
     assert data == {"status": "ok", "exit_code": 0, "output": "/karo/output/view.html"}
 
 
+def test_split_sections_forwards_only_aggregate_piece_counts():
+    boundary = Boundary()
+    # Log lines carry a private group value; only the JSON summary may cross,
+    # and it holds counts alone — no group value, no coordinate.
+    stdout = (f"[split_sections] group 1 ({PRIVATE}): 3 piece(s) sizes [5, 4, 1]\n"
+              'SPLIT_SECTIONS_JSON {"n_sections": 5, "n_groups": 2, "method": "auto", '
+              '"key": "section", "groups": [{"pieces": 3, "sizes": [5, 4, 1]}, '
+              '{"pieces": 2, "sizes": [7, 2]}]}\n')
+    data = payload(boundary.filter("split_sections", {}, {}, raw(stdout)))
+    assert data["n_sections"] == 5 and data["n_groups"] == 2
+    assert data["method"] == "auto" and data["key"] == "section"
+    assert data["groups"] == [{"pieces": 3, "sizes": [5, 4, 1]},
+                              {"pieces": 2, "sizes": [7, 2]}]
+
+
+def test_split_sections_without_summary_fails_closed():
+    response = Boundary().filter("split_sections", {}, {}, raw("no summary here"))
+    assert response["is_error"]
+    assert payload(response)["diagnostic"] == "schema_unavailable"
+
+
 def test_geo_files_keep_sample_relationship_without_names():
     boundary = Boundary()
     text = (f"GEO manifest: GSE123\ntitle: {PRIVATE}\n"

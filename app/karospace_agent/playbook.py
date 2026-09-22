@@ -57,6 +57,7 @@ Inspect  — inspect_input     sanitized obs/feature metadata for a file. ALWAYS
 Prepare  — run_preprocess    add a leiden clustering when a raw file has no annotations (writes obs['leiden']).
            generate_notebook  hand off heavier prep (CellCharter spatial domains) as a notebook the researcher runs.
            merge_sections    merge per-section files that lack sample metadata.
+           split_sections    split multiple tissue pieces sharing one sample_id into per-piece sections (spatial gaps).
 Enrich   — run_companion      pre-process (spatial graph / analytics) before export.
 Export   — run_export        run the export; read its exit code + errors and iterate.
 Deliver  — package_sidecar   turn a sidecar viewer into a single-file .karospace.
@@ -146,6 +147,24 @@ If it really is one section and there are no siblings to merge, build it honestl
 as a single section: pass --section-key "" (empty) so karospace treats the whole
 dataset as one section — never repurpose a cardinality-1 placeholder as the
 section key.
+
+## 0c. Multi-piece trap — one sample_id, several physical tissue pieces
+The inverse of §0: a single Xenium/Visium capture often holds several separate
+tissue pieces on the same slide (e.g. "normal skin + keloid", or three replicate
+strips). They land in one file under one sample_id but sit millimetres apart, so
+a viewer keyed on sample_id crams every piece into one panel. You CANNOT see this
+in the schema — the coordinates never cross the boundary — so it surfaces two
+ways: the researcher tells you ("each run is clearly 2-3 pieces"), or a section
+column has suspiciously low cardinality for what you know is a multi-region study.
+When either holds, call split_sections: it labels each cell's piece from the
+spatial gaps LOCALLY and writes an obs column (default 'section'). Use
+method="auto" by default — it DISCOVERS how many pieces there are, which is what
+you need since you can't count them yourself; pass within=<the sample_id/library
+column> so pieces are found per sample and never merge across samples. Only when
+the researcher gives you an exact count per capture use method="kmeans" with k.
+It reports pieces-per-group and per-piece cell counts — relay those so the user
+can confirm they match what they see on the slide — then export with --section-key
+set to the new column.
 
 ## 1. Inspect first — always
 Call inspect_input on the file. For a .zarr with multiple tables, pass the table

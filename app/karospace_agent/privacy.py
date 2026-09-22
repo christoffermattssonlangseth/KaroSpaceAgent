@@ -308,6 +308,27 @@ class Boundary:
             if not match:
                 raise ValueError("unknown fetch result")
             data["file"] = self.register_path(match[1])
+        elif name == "split_sections":
+            # Aggregate counts only: piece counts and per-piece cell counts. The
+            # group VALUES (sample IDs) and every coordinate stay local.
+            match = re.search(r"(?m)^SPLIT_SECTIONS_JSON (\{.*\})$", stdout)
+            if not match:
+                raise ValueError("unknown split result")
+            summary = json.loads(match[1])
+            for field in ("n_sections", "n_groups"):
+                if isinstance(summary.get(field), int):
+                    data[field] = summary[field]
+            for field in ("method", "key"):
+                if isinstance(summary.get(field), str):
+                    data[field] = summary[field]
+            groups = summary.get("groups")
+            if isinstance(groups, list):
+                data["groups"] = [
+                    {"pieces": int(g["pieces"]),
+                     "sizes": [int(s) for s in g.get("sizes", [])]}
+                    for g in groups
+                    if isinstance(g, dict) and isinstance(g.get("pieces"), int)
+                ]
         if remote_args.get("output"):
             data["output"] = remote_args["output"]
         return result(data)

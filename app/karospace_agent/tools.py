@@ -326,6 +326,55 @@ async def run_preprocess(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @tool(
+    "split_sections",
+    "Split physically-separate tissue pieces on ONE capture into their own "
+    "labelled sections. A single Xenium/Visium run often holds several pieces on "
+    "the same slide (e.g. normal skin + keloid, or three replicate strips): they "
+    "share one sample_id but sit millimetres apart, so a viewer keyed on sample_id "
+    "crams them into one panel. This assigns each cell to its piece from the "
+    "spatial coordinates alone and writes an obs column to use as --section-key. "
+    "Method 'auto' (default) DISCOVERS how many pieces there are from the empty "
+    "gaps between them — use it when nobody has eyeballed the slide, since you "
+    "cannot see the coordinates. Method 'kmeans' takes a known count k per group — "
+    "use it only when the researcher tells you how many pieces a capture has. Set "
+    "'within' to an existing grouping column (usually 'sample_id') so pieces are "
+    "found per sample and never bleed across samples that share a coordinate "
+    "frame; labels become '<group>__p1', '<group>__p2', … The heavy read runs "
+    "LOCALLY; you receive only the aggregate result (pieces per group + per-piece "
+    "cell counts), never a coordinate. Errors with 'spatial_coordinates_missing' "
+    "if the file has no coordinates. After it finishes, inspect_input the output "
+    "and export with --section-key set to this column.",
+    {
+        "input_path": Annotated[str, "Input .h5ad with spatial coordinates in obsm."],
+        "output": Annotated[str, "Output .h5ad path (with the new section column)."],
+        "within": Annotated[
+            str, "Existing obs column to split within (e.g. 'sample_id'). '' = whole file."
+        ],
+        "method": Annotated[
+            str, "'auto' (gap detection, discovers the count) or 'kmeans' (fixed k)."
+        ],
+        "k": Annotated[int, "Pieces per group; used only when method='kmeans'. Else 0."],
+        "key": Annotated[str, "obs column name to write. Default 'section'."],
+        "coords_key": Annotated[str, "obsm key for coordinates. Default 'spatial'."],
+    },
+)
+async def split_sections(args: dict[str, Any]) -> dict[str, Any]:
+    method = (args.get("method") or "auto").strip() or "auto"
+    key = (args.get("key") or "section").strip() or "section"
+    coords_key = (args.get("coords_key") or "spatial").strip() or "spatial"
+    rr = commands.run_split_sections(
+        str(args["input_path"]),
+        str(args["output"]),
+        within=(args.get("within") or "").strip(),
+        method=method,
+        k=int(args.get("k") or 0),
+        key=key,
+        coords_key=coords_key,
+    )
+    return _report(rr, f"split_sections.py {args['input_path']} --method {method} -> {args['output']}")
+
+
+@tool(
     "generate_notebook",
     "Write a parameterized preprocessing NOTEBOOK the researcher runs themselves, "
     "instead of clustering in-agent. Use this when the analysis is too heavy or "
@@ -472,6 +521,7 @@ ALL_TOOLS = [
     rds_inspect,
     rds_convert,
     run_preprocess,
+    split_sections,
     generate_notebook,
     merge_sections,
     run_companion,

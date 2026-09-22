@@ -5,11 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "karospace-agent"
 version = "0.1.0"
-description = "Stage 2 of KaroSpaceAgent: a Claude Agent SDK app that drives the karospace CLI to build spatial-transcriptomics viewers, with the local-hands / Claude-brain / sanitized-metadata-only boundary enforced in code."
+description = "Build KaroSpace spatial-transcriptomics viewers with Claude or Codex and local sanitizing tools."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "claude-agent-sdk>=0.2",
+    "mcp>=1.0,<3",
+    "jsonschema>=4",
+    "pydantic>=2",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +31,7 @@ app = [
 
 [project.scripts]
 karospace-agent = "karospace_agent.cli:main"
+karospace-agent-mcp = "karospace_agent.mcp:main"
 
 [tool.setuptools]
 packages = ["karospace_agent"]

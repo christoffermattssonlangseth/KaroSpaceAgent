@@ -326,7 +326,7 @@
   <span id="status" class="offline"><span class="dot"></span><span id="status-text">connecting…</span></span>
   <span id="auth" title="Which credential the model runs under"></span>
   <span class="spacer"></span>
-  <span class="note">Only sanitized schema reaches the model through its tools. What you type here goes to Anthropic as-is: give paths and column <em>names</em>, never sample IDs, coordinates, or values.</span>
+  <span class="note">Paths and schema names use local aliases; raw tool logs stay here. Review the outgoing text before each send. Free-text names and identifiers cannot be detected reliably—remove them from the preview.</span>
   <button type="button" id="theme" class="icon-btn" title="Toggle theme (T)" aria-label="Toggle theme">🌙</button>
 </header>
 <main>
@@ -625,8 +625,15 @@
     ev.preventDefault();
     const text = input.value.trim();
     if (!text) return;
+    const response = await fetch("/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const draft = await response.json();
+    if (!response.ok) { addMessage("error", draft.error || "Could not prepare privacy preview."); return; }
+    if (!window.confirm("This exact text will be sent to the model provider. Check that it contains no names, patient/sample IDs, or other personal information. Cancel to edit.\n\n" + draft.text)) return;
     input.value = ""; autosize();
-    await post("/send", { text });
+    await post("/send", { draft_id: draft.draft_id });
   });
   stopBtn.addEventListener("click", () => post("/interrupt"));
   input.addEventListener("keydown", (ev) => {
@@ -646,6 +653,10 @@
     const el = $("auth");
     el.textContent = "auth: " + a.label + (a.detail ? " — " + a.detail : "");
     el.className = a.ok ? "" : "bad";
+  }).catch(() => {});
+
+  fetch("/opening").then(r => r.json()).then(draft => {
+    if (draft.text && !input.value) { input.value = draft.text; autosize(); }
   }).catch(() => {});
 
   connect();

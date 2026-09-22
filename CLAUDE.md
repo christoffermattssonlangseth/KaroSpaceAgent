@@ -34,13 +34,14 @@ CLI `--help`, and error text. **No data values** cross the boundary — not the
 expression matrix, cell coordinates, patient identifiers, sample IDs, or the
 per-column *example values* that `karospace <file> --inspect-input` prints. Strip
 those before the metadata is read: pipe inspect through `sed 's/ examples:.*//'`
-(Claude Code surface), or rely on the `inspect_input` tool's built-in
+(Claude Code and Codex workflows), or rely on the `inspect_input` tool's built-in
 `strip_inspect_examples` (the `karospace-agent` app). The heavy compute
 (`karospace`, `karospace-companion`, scanpy, DESeq2)
 always runs locally, where the data lives.
 
 ## Model note
 
-The brain is Claude (metadata-only, per the rule above). When this graduates to a
-standalone product, keep the same split: local hands, Claude for reasoning, only
-sanitized metadata crosses the boundary.
+The repository workflow runs in Claude Code or Codex using the shared
+`build-karospace-viewer` skill. The standalone app supports the Claude Agent SDK
+and Codex app-server (`--provider codex`).
+Both follow the same split: local computation and schema-only reasoning.

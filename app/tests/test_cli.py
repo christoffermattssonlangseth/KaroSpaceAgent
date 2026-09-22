@@ -85,8 +85,9 @@ def test_chat_options_append_addendum_and_keep_boundary():
 
     one_shot = agent.build_options()
     chat = agent.build_options(chat=True)
-    assert one_shot.system_prompt == prompt.SYSTEM_PROMPT
-    assert chat.system_prompt == prompt.SYSTEM_PROMPT + prompt.CHAT_ADDENDUM
+    from karospace_agent.privacy import PRIVACY_INSTRUCTIONS
+    assert one_shot.system_prompt == prompt.SYSTEM_PROMPT + PRIVACY_INSTRUCTIONS
+    assert chat.system_prompt == prompt.SYSTEM_PROMPT + prompt.CHAT_ADDENDUM + PRIVACY_INSTRUCTIONS
     # The boundary must be identical in both modes.
     for opts in (one_shot, chat):
         assert opts.tools == []

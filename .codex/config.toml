@@ -1,0 +1,9 @@
+# Install with: python -m pip install -e ./app
+# If needed, replace command with the absolute path to that Python interpreter.
+[mcp_servers.karospace]
+command = "python"
+args = ["-m", "karospace_agent.mcp"]
+startup_timeout_sec = 30
+# Allow the default 3600-second subprocess timeout plus shutdown/reporting time.
+tool_timeout_sec = 3660
+env_vars = ["KAROSPACE_BIN", "KAROSPACE_COMPANION", "RDS2H5AD_BIN", "KAROSPACE_AGENT_TIMEOUT", "KAROSPACE_MERGE_PYTHON"]

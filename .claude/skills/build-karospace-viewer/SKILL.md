@@ -10,6 +10,31 @@ a raw dataset into a standalone HTML viewer. The value you add is **choosing the
 right flags for this specific dataset** — the export has ~30 knobs and the wrong
 choices produce a broken or useless viewer.
 
+This playbook is shared by Claude Code and Codex. Resolve `scripts/` and sibling
+repository paths from the KaroSpaceAgent repository root, not the skill folder
+or a nested working directory. Use the current host's tools and permissions.
+
+### MCP tools when connected
+
+Prefer the `karospace` MCP tools over the shell examples below when available.
+They implement the same workflow and sanitize results locally; `inspect_input`
+already strips example values, so no additional shell inspection is needed.
+Use each tool's advertised argument schema.
+
+| Workflow operation | MCP tool |
+| --- | --- |
+| GEO catalogue, build, supplementary download | `geo_manifest`, `geo_build`, `geo_fetch_file` |
+| R object inspection and conversion | `rds_inspect`, `rds_convert` |
+| Dataset schema and structure | `inspect_input`, `inspect_structure` |
+| Exporter flags | `cli_help` |
+| Clustering, notebook handoff, merging | `run_preprocess`, `generate_notebook`, `merge_sections` |
+| Companion enrichment | `run_companion` |
+| Export, package, artifact checks | `run_export`, `package_sidecar`, `validate_output` |
+
+The shell examples remain the fallback when a tool is unavailable. MCP provides
+sanitizing wrappers; it does not disable the coding agent's other tools or
+override its permissions.
+
 ## Data-handling rule
 
 Datasets range from non-sensitive (e.g. mouse) to sensitive human data under
@@ -366,7 +391,8 @@ already have — so it is always safe. A failed check is a reason to iterate, no
 footnote:
 
 - **Section key is real, not a placeholder** — cardinality ~2–100, never a
-  cardinality-1 column (the single-section trap, §0).
+  cardinality-1 column (the single-section trap, §0). An intentional empty
+  `--section-key ""` is correct for a genuinely single-section dataset.
 - **No annotation left behind** — every analysis-derived cell annotation in `obs`
   made it into `--cell-annotations` (§2), and no ID / per-cell QC numeric /
   `karospace_*` column was swept in by mistake.
@@ -381,9 +407,11 @@ footnote:
   viewer AND the `.karospace` (§4, §7), not merely that the command exited 0.
 - **The boundary held** — you neither requested nor emitted a data value.
 
-For a stronger check, delegate this pass to the `karospace-viewer-reviewer`
-subagent, which sees only the schema, the chosen flags, and the logs and reports
-what it would change.
+When an independent review is requested and the host provides the
+`karospace-viewer-reviewer` subagent, it can perform this pass using only the
+schema, chosen flags, and sanitized logs. Otherwise perform the checklist in
+the current conversation; Claude Code's named subagents are not required to
+use this skill in Codex.
 
 ## Before you finish
 

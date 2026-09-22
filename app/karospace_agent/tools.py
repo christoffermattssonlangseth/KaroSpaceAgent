@@ -25,7 +25,7 @@ def _result(text: str, is_error: bool = False) -> dict[str, Any]:
 
 
 def _report(rr: commands.RunResult, label: str) -> dict[str, Any]:
-    """Render a RunResult for the model: exit code + truncated stdout/stderr."""
+    """Capture a local report for privacy.Boundary; never send it directly."""
     body = (
         f"$ {label}\n"
         f"exit code: {rr.returncode}"
@@ -35,7 +35,12 @@ def _report(rr: commands.RunResult, label: str) -> dict[str, Any]:
         + "\n\n--- stderr ---\n"
         + truncate(rr.stderr)
     )
-    return _result(body, is_error=not rr.ok)
+    result = _result(body, is_error=not rr.ok)
+    # Local-only input to the privacy boundary. Never passed through the SDK:
+    # build_server wraps every handler and constructs a fresh outbound result.
+    result["_local"] = {"returncode": rr.returncode, "stdout": rr.stdout,
+                        "stderr": rr.stderr, "timed_out": rr.timed_out}
+    return result
 
 
 # --- Inspection -----------------------------------------------------------
@@ -102,10 +107,12 @@ async def inspect_structure(args: dict[str, Any]) -> dict[str, Any]:
 )
 async def cli_help(args: dict[str, Any]) -> dict[str, Any]:
     verb = (args.get("verb") or "").strip()
+    if verb not in ("", "package-sidecar", "ome-convert"):
+        return _result("Unsupported help topic.", is_error=True)
     argv = ([verb] if verb else []) + ["--help"]
     rr = commands.run_karospace(argv, timeout=60)
     # argparse prints help to stdout and exits 0; some verbs exit 0 too.
-    return _result(truncate(rr.stdout or rr.stderr))
+    return _report(rr, "karospace help")
 
 
 # --- Acquisition (GEO) ----------------------------------------------------
@@ -480,5 +487,12 @@ TOOL_NAMES = [t.name for t in ALL_TOOLS]
 ALLOWED_TOOL_NAMES = [f"mcp__{SERVER_NAME}__{name}" for name in TOOL_NAMES]
 
 
-def build_server():
-    return create_sdk_mcp_server(name=SERVER_NAME, version="0.1.0", tools=ALL_TOOLS)
+def build_server(boundary=None):
+    from .privacy import Boundary, PRIVACY_INSTRUCTIONS
+    boundary = boundary or Boundary(allow_local_paths=True)
+    wrapped = []
+    for definition in ALL_TOOLS:
+        async def invoke(arguments, definition=definition):
+            return await boundary.invoke(definition, arguments)
+        wrapped.append(tool(definition.name, definition.description + PRIVACY_INSTRUCTIONS, definition.input_schema)(invoke))
+    return create_sdk_mcp_server(name=SERVER_NAME, version="0.1.0", tools=wrapped)

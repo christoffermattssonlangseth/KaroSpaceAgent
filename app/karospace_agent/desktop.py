@@ -12,7 +12,7 @@ server to exit and join it.
 
 The data boundary is unchanged from `web.py`: the tools run locally, only
 sanitized metadata reaches the model, and the composer note still warns that
-typed text goes to Anthropic as-is.
+typed text goes to the selected model provider as-is.
 """
 
 from __future__ import annotations
@@ -64,10 +64,11 @@ def _free_port(host: str = "127.0.0.1") -> int:
 
 
 def run_app(
-    model: str = agent.DEFAULT_MODEL,
+    model: str | None = None,
     opening_message: str | None = None,
     host: str = "127.0.0.1",
     title: str = WINDOW_TITLE,
+    provider: str = agent.DEFAULT_PROVIDER,
 ) -> None:
     """Serve the app on a background thread and show it in a native window.
 
@@ -89,7 +90,7 @@ def run_app(
     from .web import create_app
 
     port = _free_port(host)
-    app = create_app(model=model, opening_message=opening_message)
+    app = create_app(model=model, opening_message=opening_message, provider=provider)
     config = uvicorn.Config(app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(config)
 

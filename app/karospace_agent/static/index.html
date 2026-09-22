@@ -326,7 +326,7 @@
   <span id="status" class="offline"><span class="dot"></span><span id="status-text">connecting…</span></span>
   <span id="auth" title="Which credential the model runs under"></span>
   <span class="spacer"></span>
-  <span class="note">Only sanitized schema reaches the model through its tools. What you type here goes to Anthropic as-is: give paths and column <em>names</em>, never sample IDs, coordinates, or values.</span>
+  <span class="note">Paths and schema names use local aliases; raw tool logs stay here. Review the outgoing text before each send. Free-text names and identifiers cannot be detected reliably—remove them from the preview.</span>
   <button type="button" id="theme" class="icon-btn" title="Toggle theme (T)" aria-label="Toggle theme">🌙</button>
 </header>
 <main>
@@ -365,6 +365,38 @@
   const input = $("input"), sendBtn = $("send"), stopBtn = $("stop");
   let lines = 0, lastAssistant = null;
   const MAX_LOG_LINES = 5000;
+
+  // Proof-of-life while the agent works. The model can go quiet for minutes —
+  // reasoning over a big companion result, or waiting on karospace to load the
+  // data before its first progress line — with nothing new on screen. A ticking
+  // elapsed clock (plus the current step's name) shows it's still going rather
+  // than stuck. Client-side only: no data crosses, it's just the wall clock.
+  let workStart = null, workTimer = null, activity = "";
+  const ACTIVITY = {
+    inspect_input: "Inspecting", cli_help: null,
+    merge_sections: "Merging sections", run_companion: "Pre-processing",
+    run_export: "Exporting viewer", package_sidecar: "Packaging",
+    validate_output: "Validating",
+    geo_manifest: "Reading GEO", geo_build: "Fetching dataset",
+    geo_fetch_file: "Downloading", rds_inspect: "Inspecting R object",
+    rds_convert: "Converting R object",
+  };
+  function fmtElapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+  function renderWorking() {
+    if (workStart == null) return;
+    const t = fmtElapsed(Date.now() - workStart);
+    statusText.textContent = (activity ? activity + " · " : "working… ") + t;
+  }
+  function setActivity(toolText) {
+    // "mcp__karospace__run_companion(args…)" -> "run_companion" -> a label.
+    const name = (toolText || "").split("(")[0].trim().split("__").pop();
+    if (name in ACTIVITY) {          // known step; null means "don't relabel"
+      if (ACTIVITY[name] !== null) { activity = ACTIVITY[name]; renderWorking(); }
+    }
+  }
 
   // Theme: default from stored choice, else system preference. Toggle with the
   // header button or the `T` key, mirroring the KaroSpace viewer.
@@ -476,10 +508,18 @@
 
   function setState(state) {
     status.className = state;
-    statusText.textContent = ({
-      idle: "idle", working: "working…", interrupting: "stopping…", offline: "disconnected",
-    })[state] || state;
     stopBtn.disabled = state !== "working";
+    if (state === "working") {
+      if (workStart == null) workStart = Date.now();   // one clock per turn
+      renderWorking();
+      if (!workTimer) workTimer = setInterval(renderWorking, 1000);
+      return;
+    }
+    if (workTimer) { clearInterval(workTimer); workTimer = null; }
+    workStart = null; activity = "";
+    statusText.textContent = ({
+      idle: "idle", interrupting: "stopping…", offline: "disconnected",
+    })[state] || state;
   }
 
   function addProgress(stream, line) {
@@ -520,7 +560,6 @@
       const name = raw.split("__").pop();
       const stage = TOOL_STAGE[name];
       if (!stage) return;
-      if (name === "inspect_input") reset();
       const idx = order.indexOf(stage);
       order.forEach((k, j) => {
         if (j >= idx) return;
@@ -554,7 +593,7 @@
           lastAssistant = addMessage("assistant", e.text, true);
         }
         break;
-      case "tool": lastAssistant = null; addMessage("tool", e.text); pipeline.onTool(e.text); break;
+      case "tool": lastAssistant = null; addMessage("tool", e.text); pipeline.onTool(e.text); setActivity(e.text); break;
       case "error": lastAssistant = null; addMessage("error", e.text); break;
       case "progress": addProgress(e.stream, e.line); break;
       case "status": setState(e.state); pipeline.onStatus(e.state); break;
@@ -585,8 +624,16 @@
     ev.preventDefault();
     const text = input.value.trim();
     if (!text) return;
+    const response = await fetch("/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const draft = await response.json();
+    if (!response.ok) { addMessage("error", draft.error || "Could not prepare privacy preview."); return; }
+    if (!window.confirm("This exact text will be sent to the model provider. Check that it contains no names, patient/sample IDs, or other personal information. Cancel to edit.\n\n" + draft.text)) return;
     input.value = ""; autosize();
-    await post("/send", { text });
+    pipeline.reset();   // a new run starts fresh — clear the previous run's stages
+    await post("/send", { draft_id: draft.draft_id });
   });
   stopBtn.addEventListener("click", () => post("/interrupt"));
   input.addEventListener("keydown", (ev) => {
@@ -606,6 +653,10 @@
     const el = $("auth");
     el.textContent = "auth: " + a.label + (a.detail ? " — " + a.detail : "");
     el.className = a.ok ? "" : "bad";
+  }).catch(() => {});
+
+  fetch("/opening").then(r => r.json()).then(draft => {
+    if (draft.text && !input.value) { input.value = draft.text; autosize(); }
   }).catch(() => {});
 
   connect();

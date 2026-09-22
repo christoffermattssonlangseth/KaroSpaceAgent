@@ -10,6 +10,31 @@ a raw dataset into a standalone HTML viewer. The value you add is **choosing the
 right flags for this specific dataset** — the export has ~30 knobs and the wrong
 choices produce a broken or useless viewer.
 
+This playbook is shared by Claude Code and Codex. Resolve `scripts/` and sibling
+repository paths from the KaroSpaceAgent repository root, not the skill folder
+or a nested working directory. Use the current host's tools and permissions.
+
+### MCP tools when connected
+
+Prefer the `karospace` MCP tools over the shell examples below when available.
+They implement the same workflow and sanitize results locally; `inspect_input`
+already strips example values, so no additional shell inspection is needed.
+Use each tool's advertised argument schema.
+
+| Workflow operation | MCP tool |
+| --- | --- |
+| GEO catalogue, build, supplementary download | `geo_manifest`, `geo_build`, `geo_fetch_file` |
+| R object inspection and conversion | `rds_inspect`, `rds_convert` |
+| Dataset schema and structure | `inspect_input`, `inspect_structure` |
+| Exporter flags | `cli_help` |
+| Clustering, notebook handoff, merging | `run_preprocess`, `generate_notebook`, `merge_sections` |
+| Companion enrichment | `run_companion` |
+| Export, package, artifact checks | `run_export`, `package_sidecar`, `validate_output` |
+
+The shell examples remain the fallback when a tool is unavailable. MCP provides
+sanitizing wrappers; it does not disable the coding agent's other tools or
+override its permissions.
+
 ## Data-handling rule
 
 Datasets range from non-sensitive (e.g. mouse) to sensitive human data under
@@ -144,6 +169,39 @@ single section rather than forcing a placeholder: pass `--section-key ""` (an em
 value) and karospace exports the whole dataset as one section. Never repurpose a
 cardinality-1 column (e.g. `orig.ident`) as the section key.
 
+### 0c. Multi-piece rule — split before you key on a per-capture column
+
+A single Xenium/Visium capture often holds **several separate tissue pieces** on
+one slide (e.g. "normal skin + keloid", or three replicate strips). They land in
+one file under one `sample_id` but sit millimetres apart, so a viewer keyed on
+`sample_id` crams every piece into one panel. You **cannot see this in the
+schema** — coordinates never cross the boundary — so never pass a per-capture
+column (`sample_id` / `library` / `slide` / `fov`) straight to `--section-key` on
+a spatial dataset. **Always split first**, on every spatial build:
+
+1. **Ask the researcher how many pieces they see per capture.** If they give a
+   count, split with `--method kmeans --k <count>`. If they don't know, use
+   `--method auto` — it *discovers* the count from the spatial gaps, which is
+   exactly what you can't do yourself.
+2. Pass `--within <sample_id/library column>` so pieces are found per sample and
+   never merge across samples. It writes a new obs column (default `section`),
+   running locally on disk — no coordinate leaves the machine:
+
+   ```bash
+   python scripts/split_sections.py /path/in.h5ad -o /path/split.h5ad \
+     --within sample_id --method auto --key section
+   ```
+
+3. It prints a `SPLIT_SECTIONS_JSON` summary of **pieces-per-group and per-piece
+   cell counts** — relay those so the researcher can confirm they match the slide.
+4. Build with `--section-key section` (the new column) when any group split into
+   >1 piece. If every group came back as a single piece, the original column is
+   fine — but you only know that because you ran the split.
+
+Running the split is close to free: on a capture that genuinely is one piece,
+`auto` just returns one piece per group. Skipping it silently ships the
+crammed-panel bug, so don't treat it as optional or wait to "suspect" pieces.
+
 ### 1. Inspect first — always
 
 ```bash
@@ -209,7 +267,7 @@ carries annotations (most researcher-supplied files do).
 
 | Flag | How to pick it |
 | --- | --- |
-| `--section-key` | Column identifying each section/sample. Look for `sample_id`, `Sample Id`, `sample`, `section`, `slide`, `fov`, `library`, `condition`. Must be categorical, cardinality ~2–100. **A candidate with cardinality 1 is a placeholder** (e.g. `orig.ident`, the Seurat default when never set) — that is *not* a real section key. For a genuinely single-section dataset (no real section column, no siblings to merge — see §0), pass `--section-key ""` (empty) so karospace exports the whole dataset as one section; prefer that over forcing a placeholder. |
+| `--section-key` | Column identifying each section/sample. Look for `sample_id`, `Sample Id`, `sample`, `section`, `slide`, `fov`, `library`, `condition`. Must be categorical, cardinality ~2–100. **A candidate with cardinality 1 is a placeholder** (e.g. `orig.ident`, the Seurat default when never set) — that is *not* a real section key. For a genuinely single-section dataset (no real section column, no siblings to merge — see §0), pass `--section-key ""` (empty) so karospace exports the whole dataset as one section; prefer that over forcing a placeholder. **On a spatial dataset, never key on a per-capture column without running the split first (see §0c)** — one `sample_id` can hold several physical tissue pieces you can't see in the schema. |
 | `--main-cell-annotation` | Primary cell-type column. Prefer a human-readable `cell_type`/`celltype`/`annotation` over clustering when both exist. If only clustering exists, use a mid-resolution one (the plain `leiden` if present) as primary — the rest stay exposed via `--cell-annotations`. |
 | `--section-metadata` | Categorical experimental variables to show as filter chips: `condition`, `stage`, `timepoint`, `region`, `sex`, `genotype`, `treatment`, `model`, `batch`. Pick the ones that vary across sections. |
 | `--cell-annotations` | **Expose EVERY analysis-derived cell annotation, not a curated subset** — users switch between them, so a missed one is a missed view. **Principle (apply it, don't just match names):** a cell annotation is any obs column assigning each cell to a discrete group produced by analysis — clustering, cell-typing, or spatial-domain/niche detection — at any resolution or k. The families are *illustrative, not a whitelist*; catch methods not listed too: clustering (`leiden`, `louvain`, `kmeans`, `walktrap`, `phenograph`, `SNN`, `mclust`, and `<method>_<resolution>` families like `leiden_0_2`…`leiden_4_0`); cell-typing (`cell_type`, `annotation`, `subtype`, `predicted.*`, SingleR/Azimuth-style labels); spatial domains/niches (`CellCharter`, `niche`, `domain`, `UTAG`, `Banksy`, and `<method>_<k>` families like `CellCharter_6`…`CellCharter_30`). The **structural test** is the real net: include any categorical (or low-cardinality integer) obs column, cardinality ~2–300, that isn't an experimental variable (→ `--section-metadata`), an ID (cardinality ≈ cell count, e.g. `cell_id`), or a QC metric. **When unsure, include it.** Never expose ID columns or per-cell continuous QC numerics. **Exception:** columns prefixed `karospace_` (e.g. `karospace_polygon_labels`, `karospace_polygon_count`) and prior-session region/polygon indices (e.g. `polygon_index`) are KaroSpace's *own* round-tripped output from an earlier session, not independent annotations — do **not** sweep them in; mention them so the user can opt in, but leave them out by default. |
@@ -366,7 +424,8 @@ already have — so it is always safe. A failed check is a reason to iterate, no
 footnote:
 
 - **Section key is real, not a placeholder** — cardinality ~2–100, never a
-  cardinality-1 column (the single-section trap, §0).
+  cardinality-1 column (the single-section trap, §0). An intentional empty
+  `--section-key ""` is correct for a genuinely single-section dataset.
 - **No annotation left behind** — every analysis-derived cell annotation in `obs`
   made it into `--cell-annotations` (§2), and no ID / per-cell QC numeric /
   `karospace_*` column was swept in by mistake.
@@ -381,9 +440,11 @@ footnote:
   viewer AND the `.karospace` (§4, §7), not merely that the command exited 0.
 - **The boundary held** — you neither requested nor emitted a data value.
 
-For a stronger check, delegate this pass to the `karospace-viewer-reviewer`
-subagent, which sees only the schema, the chosen flags, and the logs and reports
-what it would change.
+When an independent review is requested and the host provides the
+`karospace-viewer-reviewer` subagent, it can perform this pass using only the
+schema, chosen flags, and sanitized logs. Otherwise perform the checklist in
+the current conversation; Claude Code's named subagents are not required to
+use this skill in Codex.
 
 ## Before you finish
 

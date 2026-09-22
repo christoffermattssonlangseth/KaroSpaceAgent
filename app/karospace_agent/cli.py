@@ -31,17 +31,17 @@ PROMPT = "\nyou> "
 CHAT_BANNER = """\
 karospace-agent chat — type a message, /quit to leave (Ctrl-D also works).
 Ctrl-C while the agent is working interrupts that turn; twice quits.
-Only sanitized schema reaches the model through the tools, but whatever YOU
-type here is sent to Anthropic as-is: give file paths and column NAMES, never
-sample IDs, coordinates, or other data values."""
+Tools send aliased schema and fixed status codes. Each message gets a local
+privacy preview: remove names, patient/sample IDs and other personal data
+before typing SEND. Quote file paths that contain spaces."""
 
 
-def _preflight() -> list[str]:
+def _preflight(provider: str = agent.DEFAULT_PROVIDER) -> list[str]:
     """Non-fatal environment notes surfaced before a run."""
     notes = []
-    status = auth.detect()
+    status = agent.auth_status(provider)
     if not status.ok:
-        notes.append(_auth_warning(status))
+        notes.append(status.line() if provider == "codex" else _auth_warning(status))
     if karospace_bin() is None:
         notes.append("karospace not found on PATH (set KAROSPACE_BIN) — required.")
     if companion_bin() is None:
@@ -74,9 +74,11 @@ def _auth_warning(status: auth.AuthStatus) -> str:
     )
 
 
-def auth_report(status: auth.AuthStatus | None = None) -> tuple[str, int]:
+def auth_report(status: auth.AuthStatus | None = None, provider: str = agent.DEFAULT_PROVIDER) -> tuple[str, int]:
     """Text + exit code for `karospace-agent auth`: 0 usable, 1 none, 3 not permitted."""
-    status = status or auth.detect()
+    status = status or agent.auth_status(provider)
+    if provider == "codex":
+        return status.line(), 0 if status.ok else 1
     lines = [status.line()]
     if status.ok:
         lines.append("This is a permitted credential for karospace-agent.")
@@ -190,6 +192,16 @@ def _swallow(task: asyncio.Task) -> None:
 
 
 async def _turn(session: agent.Session, text: str) -> str:
+    if hasattr(session, "boundary"):
+        preview = session.boundary.preview(text)
+        print("\nPrivacy preview — only this text will be sent to the model.\n"
+              "Remove all names, patient/sample IDs and other personal information.\n\n"
+              + preview["text"], file=sys.stderr)
+        answer = await _ainput(lambda: _read_line("Type SEND to send this reviewed text, or Enter to cancel: "))
+        if answer != "SEND":
+            print("Message not sent.", file=sys.stderr)
+            return ""
+        text = session.boundary.approve(preview["draft_id"])
     async with TurnInterrupter(session):
         return await session.send(text)
 
@@ -216,17 +228,22 @@ async def chat_loop(
         await _turn(session, line)
 
 
-async def _chat(input_path: str | None, intent: str, model: str) -> None:
+async def _chat(input_path: str | None, intent: str, model: str | None, provider: str = agent.DEFAULT_PROVIDER) -> None:
     first = _compose_prompt(input_path, intent) if input_path else None
-    async with agent.Session(model=model) as session:
+    async with agent.create_session(provider, model) as session:
         await chat_loop(session, first)
+
+
+async def _build(prompt: str, model: str | None, provider: str) -> None:
+    async with agent.create_session(provider, model) as session:
+        await _turn(session, prompt)
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="karospace-agent",
-        description="Drive the karospace CLI with Claude to build a viewer "
-        "(local hands, Claude brain, sanitized metadata only).",
+        description="Drive the karospace CLI with Claude or Codex to build a viewer "
+        "(local computation, sanitized metadata only).",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -241,8 +258,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     b.add_argument(
         "--model",
-        default=agent.DEFAULT_MODEL,
-        help=f"Model alias or id (default: {agent.DEFAULT_MODEL}).",
+        default=None,
+        help="Model id (default: KAROSPACE_AGENT_MODEL, else the provider default).",
     )
 
     c = sub.add_parser(
@@ -263,8 +280,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     c.add_argument(
         "--model",
-        default=agent.DEFAULT_MODEL,
-        help=f"Model alias or id (default: {agent.DEFAULT_MODEL}).",
+        default=None,
+        help="Model id (default: KAROSPACE_AGENT_MODEL, else the provider default).",
     )
 
     sub.add_parser(
@@ -283,8 +300,8 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--port", type=int, default=8765, help="Port (default: 8765).")
     w.add_argument(
         "--model",
-        default=agent.DEFAULT_MODEL,
-        help=f"Model alias or id (default: {agent.DEFAULT_MODEL}).",
+        default=None,
+        help="Model id (default: KAROSPACE_AGENT_MODEL, else the provider default).",
     )
 
     a = sub.add_parser(
@@ -296,9 +313,14 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("intent", nargs="?", default="", help="Intent for the opening build.")
     a.add_argument(
         "--model",
-        default=agent.DEFAULT_MODEL,
-        help=f"Model alias or id (default: {agent.DEFAULT_MODEL}).",
+        default=None,
+        help="Model id (default: KAROSPACE_AGENT_MODEL, else the provider default).",
     )
+    for parser in sub.choices.values():
+        parser.add_argument(
+            "--provider", choices=("claude", "codex"), default=agent.DEFAULT_PROVIDER,
+            help="Model provider (default: KAROSPACE_AGENT_PROVIDER or claude).",
+        )
     return p
 
 
@@ -314,17 +336,17 @@ def main(argv: list[str] | None = None) -> int:
         pathfix.hydrate_path()
 
     if args.command == "auth":
-        text, code = auth_report()
+        text, code = auth_report(provider=args.provider)
         print(text)
         return code
 
-    for note in _preflight():
+    for note in _preflight(args.provider):
         print(f"warning: {note}", file=sys.stderr)
 
     if args.command == "build":
         prompt = _compose_prompt(args.input, args.intent)
         try:
-            asyncio.run(agent.run(prompt, model=args.model))
+            asyncio.run(_build(prompt, args.model, args.provider))
         except KeyboardInterrupt:
             print("\nInterrupted.", file=sys.stderr)
             return 130
@@ -332,9 +354,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "chat":
         print(CHAT_BANNER, file=sys.stderr)
-        print(auth.detect().line(), file=sys.stderr)
+        print(agent.auth_status(args.provider).line(), file=sys.stderr)
         try:
-            asyncio.run(_chat(args.input, args.intent, args.model))
+            asyncio.run(_chat(args.input, args.intent, args.model, args.provider))
         except (KeyboardInterrupt, asyncio.CancelledError):
             print("\nInterrupted.", file=sys.stderr)
             return 130
@@ -356,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"karospace-agent web: http://{args.host}:{args.port}/  (Ctrl-C to stop)",
               file=sys.stderr)
         try:
-            web.serve(host=args.host, port=args.port, model=args.model, opening_message=first)
+            web.serve(host=args.host, port=args.port, model=args.model, opening_message=first, provider=args.provider)
         except KeyboardInterrupt:
             return 130
         return 0
@@ -369,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         first = _compose_prompt(args.input, args.intent) if args.input else None
         try:
-            desktop.run_app(model=args.model, opening_message=first)
+            desktop.run_app(model=args.model, opening_message=first, provider=args.provider)
         except (ImportError, RuntimeError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 2

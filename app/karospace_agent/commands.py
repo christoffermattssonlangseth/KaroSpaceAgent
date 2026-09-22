@@ -30,6 +30,7 @@ MERGE_SCRIPT = REPO_ROOT / "scripts" / "merge_sections.py"
 STRUCTURE_SCRIPT = REPO_ROOT / "scripts" / "inspect_structure.py"
 GEO_SCRIPT = REPO_ROOT / "scripts" / "geo_fetch.py"
 PREPROCESS_SCRIPT = REPO_ROOT / "scripts" / "preprocess.py"
+SPLIT_SECTIONS_SCRIPT = REPO_ROOT / "scripts" / "split_sections.py"
 GEN_NOTEBOOK_SCRIPT = REPO_ROOT / "scripts" / "gen_notebook.py"
 
 # Default timeout for a full export (analytics + DE + pathway can be minutes on
@@ -523,6 +524,37 @@ def run_preprocess(
         "--n-hvg", str(n_hvg),
         "--key", key,
     ]
+    return run(argv, timeout=timeout)
+
+
+def run_split_sections(
+    input_path: str,
+    output: str,
+    within: str = "",
+    method: str = "auto",
+    k: int = 0,
+    key: str = "section",
+    coords_key: str = "spatial",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run scripts/split_sections.py — label physically-separate tissue pieces.
+
+    Uses the karospace scientific interpreter (needs anndata/scikit-learn). Reads
+    coordinates LOCALLY; the model receives only the aggregate summary (how many
+    pieces per group and their cell counts), never a coordinate.
+    """
+    if not SPLIT_SECTIONS_SCRIPT.exists():
+        return RunResult(127, "", f"split_sections script missing: {SPLIT_SECTIONS_SCRIPT}")
+    argv = [
+        merge_python(), str(SPLIT_SECTIONS_SCRIPT), input_path, "-o", output,
+        "--method", method,
+        "--key", key,
+        "--coords-key", coords_key,
+    ]
+    if within:
+        argv += ["--within", within]
+    if method == "kmeans":
+        argv += ["--k", str(k)]
     return run(argv, timeout=timeout)
 
 

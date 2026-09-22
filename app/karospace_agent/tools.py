@@ -25,7 +25,7 @@ def _result(text: str, is_error: bool = False) -> dict[str, Any]:
 
 
 def _report(rr: commands.RunResult, label: str) -> dict[str, Any]:
-    """Render a RunResult for the model: exit code + truncated stdout/stderr."""
+    """Capture a local report for privacy.Boundary; never send it directly."""
     body = (
         f"$ {label}\n"
         f"exit code: {rr.returncode}"
@@ -35,7 +35,12 @@ def _report(rr: commands.RunResult, label: str) -> dict[str, Any]:
         + "\n\n--- stderr ---\n"
         + truncate(rr.stderr)
     )
-    return _result(body, is_error=not rr.ok)
+    result = _result(body, is_error=not rr.ok)
+    # Local-only input to the privacy boundary. Never passed through the SDK:
+    # build_server wraps every handler and constructs a fresh outbound result.
+    result["_local"] = {"returncode": rr.returncode, "stdout": rr.stdout,
+                        "stderr": rr.stderr, "timed_out": rr.timed_out}
+    return result
 
 
 # --- Inspection -----------------------------------------------------------
@@ -102,10 +107,12 @@ async def inspect_structure(args: dict[str, Any]) -> dict[str, Any]:
 )
 async def cli_help(args: dict[str, Any]) -> dict[str, Any]:
     verb = (args.get("verb") or "").strip()
+    if verb not in ("", "package-sidecar", "ome-convert"):
+        return _result("Unsupported help topic.", is_error=True)
     argv = ([verb] if verb else []) + ["--help"]
     rr = commands.run_karospace(argv, timeout=60)
     # argparse prints help to stdout and exits 0; some verbs exit 0 too.
-    return _result(truncate(rr.stdout or rr.stderr))
+    return _report(rr, "karospace help")
 
 
 # --- Acquisition (GEO) ----------------------------------------------------
@@ -319,6 +326,55 @@ async def run_preprocess(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @tool(
+    "split_sections",
+    "Split physically-separate tissue pieces on ONE capture into their own "
+    "labelled sections. A single Xenium/Visium run often holds several pieces on "
+    "the same slide (e.g. normal skin + keloid, or three replicate strips): they "
+    "share one sample_id but sit millimetres apart, so a viewer keyed on sample_id "
+    "crams them into one panel. This assigns each cell to its piece from the "
+    "spatial coordinates alone and writes an obs column to use as --section-key. "
+    "Method 'auto' (default) DISCOVERS how many pieces there are from the empty "
+    "gaps between them — use it when nobody has eyeballed the slide, since you "
+    "cannot see the coordinates. Method 'kmeans' takes a known count k per group — "
+    "use it only when the researcher tells you how many pieces a capture has. Set "
+    "'within' to an existing grouping column (usually 'sample_id') so pieces are "
+    "found per sample and never bleed across samples that share a coordinate "
+    "frame; labels become '<group>__p1', '<group>__p2', … The heavy read runs "
+    "LOCALLY; you receive only the aggregate result (pieces per group + per-piece "
+    "cell counts), never a coordinate. Errors with 'spatial_coordinates_missing' "
+    "if the file has no coordinates. After it finishes, inspect_input the output "
+    "and export with --section-key set to this column.",
+    {
+        "input_path": Annotated[str, "Input .h5ad with spatial coordinates in obsm."],
+        "output": Annotated[str, "Output .h5ad path (with the new section column)."],
+        "within": Annotated[
+            str, "Existing obs column to split within (e.g. 'sample_id'). '' = whole file."
+        ],
+        "method": Annotated[
+            str, "'auto' (gap detection, discovers the count) or 'kmeans' (fixed k)."
+        ],
+        "k": Annotated[int, "Pieces per group; used only when method='kmeans'. Else 0."],
+        "key": Annotated[str, "obs column name to write. Default 'section'."],
+        "coords_key": Annotated[str, "obsm key for coordinates. Default 'spatial'."],
+    },
+)
+async def split_sections(args: dict[str, Any]) -> dict[str, Any]:
+    method = (args.get("method") or "auto").strip() or "auto"
+    key = (args.get("key") or "section").strip() or "section"
+    coords_key = (args.get("coords_key") or "spatial").strip() or "spatial"
+    rr = commands.run_split_sections(
+        str(args["input_path"]),
+        str(args["output"]),
+        within=(args.get("within") or "").strip(),
+        method=method,
+        k=int(args.get("k") or 0),
+        key=key,
+        coords_key=coords_key,
+    )
+    return _report(rr, f"split_sections.py {args['input_path']} --method {method} -> {args['output']}")
+
+
+@tool(
     "generate_notebook",
     "Write a parameterized preprocessing NOTEBOOK the researcher runs themselves, "
     "instead of clustering in-agent. Use this when the analysis is too heavy or "
@@ -465,6 +521,7 @@ ALL_TOOLS = [
     rds_inspect,
     rds_convert,
     run_preprocess,
+    split_sections,
     generate_notebook,
     merge_sections,
     run_companion,
@@ -480,5 +537,12 @@ TOOL_NAMES = [t.name for t in ALL_TOOLS]
 ALLOWED_TOOL_NAMES = [f"mcp__{SERVER_NAME}__{name}" for name in TOOL_NAMES]
 
 
-def build_server():
-    return create_sdk_mcp_server(name=SERVER_NAME, version="0.1.0", tools=ALL_TOOLS)
+def build_server(boundary=None):
+    from .privacy import Boundary, PRIVACY_INSTRUCTIONS
+    boundary = boundary or Boundary(allow_local_paths=True)
+    wrapped = []
+    for definition in ALL_TOOLS:
+        async def invoke(arguments, definition=definition):
+            return await boundary.invoke(definition, arguments)
+        wrapped.append(tool(definition.name, definition.description + PRIVACY_INSTRUCTIONS, definition.input_schema)(invoke))
+    return create_sdk_mcp_server(name=SERVER_NAME, version="0.1.0", tools=wrapped)

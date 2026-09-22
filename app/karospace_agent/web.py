@@ -8,10 +8,11 @@ no auth, so treat it as a local app with a browser window, not a service.
     GET  /            the page
     GET  /auth        which credential the model runs under (label only)
     GET  /events      Server-Sent Events: transcript replay, then live
-    POST /send        {"text": ...} -> queued as the next user turn
+    POST /preview     {"text": ...} -> local draft with aliased paths/names
+    POST /send        {"draft_id": ...} -> approve and queue that exact draft
     POST /interrupt   stop the running turn
 
-The data boundary is the Session's: built-ins off, the seven sanitizing tools.
+The data boundary is the Session's: built-ins off, allowlisted tool responses.
 What the browser shows — model text, tool-call lines, child-process progress —
 is the same local-only view the REPL prints. The only new channel is the
 textarea, and the page says so.
@@ -189,23 +190,25 @@ def _page() -> str:
 
 
 def create_app(
-    model: str = agent.DEFAULT_MODEL,
+    model: str | None = None,
     opening_message: str | None = None,
     session_factory: Callable[..., object] | None = None,
+    provider: str = agent.DEFAULT_PROVIDER,
 ) -> Starlette:
     """Build the app. `session_factory` is injectable for tests; the default
     makes a real `agent.Session` for `model`."""
     hub = Hub()
-    factory = session_factory or (lambda **kw: agent.Session(model=model, **kw))
+    factory = session_factory or (lambda **kw: agent.create_session(provider, model, **kw))
     convo = Conversation(hub, factory)
 
     async def index(request: Request):
         return HTMLResponse(_page())
 
     async def auth_status(request: Request):
-        status = auth.detect()
+        status = await asyncio.to_thread(agent.auth_status, provider)
         return JSONResponse(
-            {"label": status.label, "detail": status.detail, "ok": status.ok}
+            {"label": status.label, "detail": status.detail, "ok": status.ok,
+             "provider": provider}
         )
 
     async def events(request: Request):
@@ -222,10 +225,28 @@ def create_app(
             body = await request.json()
         except Exception:  # noqa: BLE001
             return JSONResponse({"error": "body must be JSON"}, status_code=400)
-        text = (body.get("text") or "").strip() if isinstance(body, dict) else ""
-        if not text:
+        draft_id = body.get("draft_id") if isinstance(body, dict) else None
+        if not isinstance(draft_id, str):
+            return JSONResponse({"error": "A reviewed privacy preview is required."}, status_code=400)
+        try:
+            message = convo._session.boundary.approve(draft_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"queued": convo.send(message)}, status_code=202)
+
+    async def preview(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "body must be JSON"}, status_code=400)
+        text = body.get("text") if isinstance(body, dict) else None
+        if not isinstance(text, str) or not text.strip():
             return JSONResponse({"error": "text is required"}, status_code=400)
-        return JSONResponse({"queued": convo.send(text)}, status_code=202)
+        return JSONResponse(convo._session.boundary.preview(text.strip()))
+
+    async def opening(request: Request):
+        # Local-only draft; opening a window never sends its input automatically.
+        return JSONResponse({"text": opening_message or ""})
 
     async def interrupt(request: Request):
         await convo.interrupt()
@@ -234,8 +255,6 @@ def create_app(
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette):
         await convo.start()
-        if opening_message:
-            convo.send(opening_message)
         try:
             yield
         finally:
@@ -247,6 +266,8 @@ def create_app(
             Route("/auth", auth_status),
             Route("/events", events),
             Route("/send", send, methods=["POST"]),
+            Route("/preview", preview, methods=["POST"]),
+            Route("/opening", opening),
             Route("/interrupt", interrupt, methods=["POST"]),
         ],
         lifespan=lifespan,
@@ -258,13 +279,14 @@ def create_app(
 def serve(
     host: str = "127.0.0.1",
     port: int = 8765,
-    model: str = agent.DEFAULT_MODEL,
+    model: str | None = None,
     opening_message: str | None = None,
+    provider: str = agent.DEFAULT_PROVIDER,
 ) -> None:
     import uvicorn
 
     uvicorn.run(
-        create_app(model=model, opening_message=opening_message),
+        create_app(model=model, opening_message=opening_message, provider=provider),
         host=host,
         port=port,
         log_level="warning",

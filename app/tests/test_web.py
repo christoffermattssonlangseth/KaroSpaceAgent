@@ -9,7 +9,8 @@ import pytest
 pytest.importorskip("claude_agent_sdk")
 pytest.importorskip("starlette")
 
-from karospace_agent import web  # noqa: E402
+from karospace_agent import web
+from karospace_agent.privacy import Boundary  # noqa: E402
 
 
 class FakeSession:
@@ -21,6 +22,7 @@ class FakeSession:
     def __init__(self, on_event, on_progress):
         self.on_event = on_event
         self.on_progress = on_progress
+        self.boundary = Boundary()
         self.sent = []
         self.interrupted = 0
         self.entered = self.exited = False
@@ -199,11 +201,19 @@ def test_routes_end_to_end():
     with TestClient(app) as client:
         r = client.get("/")
         assert r.status_code == 200 and "KaroSpace Agent" in r.text
-        assert "never sample IDs" in r.text  # the boundary note is on the page
+        assert "Review the outgoing text" in r.text  # the boundary note is on the page
 
         assert client.post("/send", json={"text": "  "}).status_code == 400
         assert client.post("/send", content=b"nope").status_code == 400
-        r = client.post("/send", json={"text": "hello"})
+        assert FakeSession.instances[0].sent == []
+        assert client.post("/send", json={"text": "hello"}).status_code == 400
+        opening = client.get("/opening").json()["text"]
+        for message in (opening, "hello"):
+            draft = client.post("/preview", json={"text": message}).json()
+            assert draft["text"] == message
+            r = client.post("/send", json={"draft_id": draft["draft_id"]})
+            assert r.status_code == 202
+            assert client.post("/send", json={"draft_id": draft["draft_id"]}).status_code == 400
         assert r.status_code == 202 and "queued" in r.json()
 
         r = client.post("/interrupt")

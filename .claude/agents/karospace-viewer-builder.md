@@ -36,6 +36,17 @@ compute runs locally.
 Decision discipline:
 - Choose `--section-key`, `--main-cell-annotation`, `--section-metadata` from what
   the inspect output actually shows — don't assume conventional names exist.
+- **Split multi-piece captures before keying on a per-capture column.** A single
+  spatial capture often holds several separate tissue pieces under one `sample_id`;
+  keyed on `sample_id` they cram into one panel, and you can't see it in the schema
+  because coordinates never cross the boundary. So on every spatial build, before
+  export: ASK the researcher how many pieces they see per capture — if they give a
+  count run `python scripts/split_sections.py <in> -o <split> --within sample_id
+  --method kmeans --k <count>`; if they don't know use `--method auto` (it discovers
+  the count from spatial gaps). Relay the reported pieces-per-group counts, then key
+  `--section-key` on the new column when any group split into >1 piece. Running it is
+  close to free — `auto` returns one piece per group when there genuinely is one —
+  so never skip it or wait to "suspect" multiple pieces. See the skill's §0c.
 - `--cell-annotations`: expose EVERY analysis-derived cell annotation, not a
   curated subset. Principle (apply it, don't just match names): a cell annotation
   is any obs column assigning each cell to a discrete analysis-derived group —

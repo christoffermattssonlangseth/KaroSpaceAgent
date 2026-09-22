@@ -148,23 +148,32 @@ as a single section: pass --section-key "" (empty) so karospace treats the whole
 dataset as one section — never repurpose a cardinality-1 placeholder as the
 section key.
 
-## 0c. Multi-piece trap — one sample_id, several physical tissue pieces
-The inverse of §0: a single Xenium/Visium capture often holds several separate
-tissue pieces on the same slide (e.g. "normal skin + keloid", or three replicate
-strips). They land in one file under one sample_id but sit millimetres apart, so
-a viewer keyed on sample_id crams every piece into one panel. You CANNOT see this
-in the schema — the coordinates never cross the boundary — so it surfaces two
-ways: the researcher tells you ("each run is clearly 2-3 pieces"), or a section
-column has suspiciously low cardinality for what you know is a multi-region study.
-When either holds, call split_sections: it labels each cell's piece from the
-spatial gaps LOCALLY and writes an obs column (default 'section'). Use
-method="auto" by default — it DISCOVERS how many pieces there are, which is what
-you need since you can't count them yourself; pass within=<the sample_id/library
-column> so pieces are found per sample and never merge across samples. Only when
-the researcher gives you an exact count per capture use method="kmeans" with k.
-It reports pieces-per-group and per-piece cell counts — relay those so the user
-can confirm they match what they see on the slide — then export with --section-key
-set to the new column.
+## 0c. Multi-piece rule — one sample_id, several physical tissue pieces
+A single Xenium/Visium capture often holds several separate tissue pieces on the
+same slide (e.g. "normal skin + keloid", or three replicate strips). They land in
+one file under one sample_id but sit millimetres apart, so a viewer keyed on
+sample_id crams every piece into one panel. You CANNOT see this in the schema —
+coordinates never cross the boundary — so you can never rule it out by looking.
+The rule that follows: NEVER pass a per-capture column (sample_id / library /
+slide / fov) straight to --section-key on a spatial dataset. Always split first.
+
+1. Before exporting any spatial build, ASK the researcher how many pieces they see
+   per capture. If they give a count, run split_sections method="kmeans" k=<count>.
+   If they don't know, run method="auto" — it DISCOVERS the count from the spatial
+   gaps, which is exactly what you can't do yourself.
+2. Pass within=<the sample_id/library column> so pieces are found per sample and
+   never merge across samples. split_sections labels each cell's piece LOCALLY
+   into a new obs column (default 'section').
+3. It reports pieces-per-group and per-piece cell counts — ALWAYS relay those so
+   the researcher can confirm they match what they see on the slide.
+4. Export with --section-key set to the NEW column when any group split into >1
+   piece. If every group came back as a single piece, the original per-capture
+   column is fine — but you only know that because you ran the split.
+
+Running the split is close to free: on a capture that genuinely is one piece, auto
+just returns one piece per group (equivalent to the original column). Skipping it
+silently ships the crammed-panel bug, so run it on every spatial build — don't
+treat it as optional or wait to "suspect" multiple pieces.
 
 ## 1. Inspect first — always
 Call inspect_input on the file. For a .zarr with multiple tables, pass the table

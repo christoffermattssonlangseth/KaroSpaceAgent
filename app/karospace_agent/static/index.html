@@ -205,6 +205,20 @@
     border: 1px solid var(--danger-border);
     font-family: var(--mono); font-size: 13.5px;
   }
+  /* Local section-preview panel (rendered on this machine, never sent to the model). */
+  figure.preview {
+    align-self: flex-start; margin: 0; max-width: min(520px, 100%);
+    background: var(--tool-bg); border: 1px solid var(--border-color);
+    border-radius: 8px; padding: 10px;
+  }
+  figure.preview img {
+    display: block; width: 100%; height: auto; border-radius: 4px;
+    background: #fff;
+  }
+  figure.preview figcaption {
+    margin-top: 8px; color: var(--muted-color);
+    font: 12.5px/1.45 var(--mono);
+  }
 
   /* Rendered markdown inside assistant bubbles. */
   .msg.md { white-space: normal; }
@@ -506,6 +520,26 @@
     return div;
   }
 
+  // A local section-preview panel: cells coloured by the proposed tissue piece,
+  // rendered on this machine and streamed over the local channel (the image
+  // bytes never went to the model). Shown so you can eyeball the piece count.
+  function addImage(src, group, pieces) {
+    const stick = atBottom(transcript);
+    const fig = document.createElement("figure");
+    fig.className = "preview";
+    const img = document.createElement("img");
+    img.src = src;
+    img.alt = "Section preview" + (group ? " for capture group " + group : "");
+    const cap = document.createElement("figcaption");
+    const g = group ? "Capture group " + group : "Capture";
+    cap.textContent = g + " — " + pieces + " piece(s) proposed. Confirm the count from this local preview.";
+    fig.appendChild(img);
+    fig.appendChild(cap);
+    transcript.appendChild(fig);
+    if (stick) scrollDown(transcript);
+    return fig;
+  }
+
   function setState(state) {
     status.className = state;
     stopBtn.disabled = state !== "working";
@@ -541,6 +575,7 @@
     const order = ["inspect", "prep", "export", "package", "validate"];
     const TOOL_STAGE = {
       inspect_input: "inspect",
+      preview_sections: "prep", split_sections: "prep",
       merge_sections: "prep", run_companion: "prep",
       run_export: "export", package_sidecar: "package", validate_output: "validate",
       // cli_help maps to nothing — it's a flag lookup, not a build stage.
@@ -595,6 +630,7 @@
         break;
       case "tool": lastAssistant = null; addMessage("tool", e.text); pipeline.onTool(e.text); setActivity(e.text); break;
       case "error": lastAssistant = null; addMessage("error", e.text); break;
+      case "image": lastAssistant = null; addImage(e.src, e.group, e.pieces); break;
       case "progress": addProgress(e.stream, e.line); break;
       case "status": setState(e.state); pipeline.onStatus(e.state); break;
     }
@@ -602,7 +638,7 @@
 
   function connect() {
     const es = new EventSource("/events");
-    for (const t of ["user", "assistant", "tool", "error", "progress", "status"]) {
+    for (const t of ["user", "assistant", "tool", "error", "image", "progress", "status"]) {
       es.addEventListener(t, handle);
     }
     es.onerror = () => setState("offline");   // EventSource reconnects on its own

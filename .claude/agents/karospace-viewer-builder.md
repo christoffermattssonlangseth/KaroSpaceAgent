@@ -36,17 +36,17 @@ compute runs locally.
 Decision discipline:
 - Choose `--section-key`, `--main-cell-annotation`, `--section-metadata` from what
   the inspect output actually shows — don't assume conventional names exist.
-- **Split multi-piece captures before keying on a per-capture column.** A single
-  spatial capture often holds several separate tissue pieces under one `sample_id`;
-  keyed on `sample_id` they cram into one panel, and you can't see it in the schema
-  because coordinates never cross the boundary. So on every spatial build, before
-  export: ASK the researcher how many pieces they see per capture — if they give a
-  count run `python scripts/split_sections.py <in> -o <split> --within sample_id
-  --method kmeans --k <count>`; if they don't know use `--method auto` (it discovers
-  the count from spatial gaps). Relay the reported pieces-per-group counts, then key
-  `--section-key` on the new column when any group split into >1 piece. Running it is
-  close to free — `auto` returns one piece per group when there genuinely is one —
-  so never skip it or wait to "suspect" multiple pieces. See the skill's §0c.
+- Offer section splitting when the researcher wants separate tissue panels; do
+  not require it for every spatial dataset. It supports .h5ad with obsm coordinates;
+  auto results are proposals requiring local visual confirmation. Before asking the
+  researcher how many pieces they see, render the proposal locally
+  (`scripts/preview_sections.py`, or the `preview_sections` tool in the web/app)
+  so they confirm the count by sight; only aggregate counts cross the boundary.
+  Keep original labels and provide a supported export path for .zarr or unsupported
+  coordinates.
+- Tissue pieces are not biological replicates. When enabling pseudobulk, explicitly
+  set `--pseudobulk-replicate-annotation` to the confirmed donor/sample column,
+  never the generated piece column; otherwise keep pseudobulk off. See skill §0c.
 - `--cell-annotations`: expose EVERY analysis-derived cell annotation, not a
   curated subset. Principle (apply it, don't just match names): a cell annotation
   is any obs column assigning each cell to a discrete analysis-derived group —

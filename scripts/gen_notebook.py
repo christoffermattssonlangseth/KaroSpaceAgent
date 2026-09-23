@@ -26,7 +26,7 @@ import json
 import sys
 from pathlib import Path
 
-CELLCHARTER_DOCS = "https://cellcharter.readthedocs.io/"
+CELLCHARTER_DOCS = "https://cellcharter.readthedocs.io/en/stable/"
 
 
 def _md(text: str) -> dict:
@@ -58,12 +58,13 @@ def build_notebook(
     genes = genes or []
     annotated = str(Path(input_path).with_name(Path(input_path).stem + "_annotated.h5ad"))
     section_repr = repr(section_key) if section_key else "None"
-    primary_k = domains_min + (domains_max - domains_min) // 2
+    if include_cellcharter and not (2 <= domains_min < domains_max):
+        raise ValueError("Choose at least two candidate domain counts, starting at 2 or higher.")
     domains_line = (
         f"\nDOMAINS = list(range({domains_min}, {domains_max} + 1))  "
-        "# candidate #spatial-domain counts to sweep; eyeball the plots, then pick"
-        f"\nPRIMARY_K = {primary_k}  "
-        "# which swept k becomes the primary 'spatial_domain' column (change after eyeballing)"
+        "# candidate domain counts for CellCharter stability selection"
+        "\nPRIMARY_K = None  "
+        "# REQUIRED: choose after reviewing stability and spatial plots"
         if include_cellcharter else ""
     )
 
@@ -85,7 +86,7 @@ points, not ground truth. Re-run and compare.
 Install into your analysis env (skip what you already have):
 
 ```
-pip install scanpy leidenalg igraph
+pip install scanpy leidenalg igraph scikit-misc
 {"pip install cellcharter scvi-tools squidpy scikit-learn torch  # heavy; GPU strongly recommended" if include_cellcharter else ""}
 ```
 {(
@@ -110,6 +111,10 @@ import scanpy as sc
 import anndata as ad
 import numpy as np
 import scipy.sparse as sp
+
+# Apply before EVERY write, including intermediate checkpoints.
+if hasattr(ad, 'settings') and hasattr(ad.settings, 'allow_write_nullable_strings'):
+    ad.settings.allow_write_nullable_strings = True
 
 adata = sc.read_h5ad(INPUT)
 print(adata)
@@ -171,13 +176,20 @@ KaroSpace-ingestible file has it).
 **This stage is heavy and long** — on ~1M+ cells scVI training runs for hours
 (a GPU is strongly recommended) and the aggregation is memory-hungry. The cells
 below therefore:
-- train scVI on the seurat_v3 HVGs of the raw `counts` (not all genes),
+- select scVI HVGs independently from raw `counts` using seurat_v3 when there
+  are more than 5,000 genes; retain all genes for smaller targeted panels,
 - **write checkpoints** after scVI and after aggregation so a crash never costs
   the whole run — re-run from the last checkpoint,
 - **aggregate per library** (the spatial graph is block-diagonal by section, so
   this is identical to the full-object call but caps peak RAM at the largest
   section — the naive full-object call OOMs at ~1.4M cells),
-- sweep several domain counts and let you eyeball them before picking `PRIMARY_K`.
+- use CellCharter ClusterAutoK stability selection and local spatial plots;
+  require you to set `PRIMARY_K` before saving the primary annotation.
+
+After a crash, load the `.post_scvi.h5ad` or `.post_aggregate.h5ad` checkpoint
+into `adata` after the parameter/import cell and resume at the next stage.
+Keep `SECTION_KEY` unchanged. Do not rerun completed training or aggregation.
+The documented API is at {CELLCHARTER_DOCS}generated/cellcharter.tl.ClusterAutoK.html.
 """),
             _code("""
 import scvi
@@ -186,6 +198,10 @@ import cellcharter as cc
 
 scvi.settings.seed = 0
 LIBRARY_KEY = SECTION_KEY if (SECTION_KEY and SECTION_KEY in adata.obs) else None
+if LIBRARY_KEY:
+    if adata.obs[LIBRARY_KEY].isna().any():
+        raise ValueError('Assign missing library labels locally before training.')
+    adata.obs[LIBRARY_KEY] = adata.obs[LIBRARY_KEY].astype('category')
 
 # Checkpoint paths derived from the output — reload to skip a finished stage.
 from pathlib import Path as _P
@@ -204,12 +220,19 @@ print('scVI accelerator:', ACCELERATOR)
             _code("""
 # --- scVI latent space (trained on seurat_v3 HVGs of the raw counts) ---
 if 'X_scVI' not in adata.obsm:
-    if 'highly_variable' not in adata.var.columns:
-        n_top = min(5000, adata.n_vars)
-        sc.pp.highly_variable_genes(
-            adata, flavor='seurat_v3', n_top_genes=n_top, subset=False, layer='counts',
+    if 'counts' not in adata.layers or not is_raw_counts(adata.layers['counts']):
+        raise ValueError('scVI requires a verified raw counts layer; prepare it locally first.')
+    # Never reuse the Leiden HVG mask, which was selected from normalized X.
+    if adata.n_vars > 5000:
+        hvg = sc.pp.highly_variable_genes(
+            adata, flavor='seurat_v3', n_top_genes=5000, subset=False,
+            layer='counts', batch_key=LIBRARY_KEY, inplace=False,
         )
-    adata_hvg = adata[:, adata.var.highly_variable].copy()
+        scvi_mask = hvg['highly_variable'].to_numpy()
+    else:
+        scvi_mask = np.ones(adata.n_vars, dtype=bool)
+    adata.var['scvi_highly_variable'] = scvi_mask
+    adata_hvg = adata[:, scvi_mask].copy()
     scvi.model.SCVI.setup_anndata(
         adata_hvg, layer='counts',
         batch_key=LIBRARY_KEY if LIBRARY_KEY in adata_hvg.obs else None,
@@ -217,6 +240,7 @@ if 'X_scVI' not in adata.obsm:
     model = scvi.model.SCVI(adata_hvg)
     model.train(max_epochs=1000, early_stopping=True, accelerator=ACCELERATOR)
     adata.obsm['X_scVI'] = model.get_latent_representation()
+    del model, adata_hvg
     adata.write_h5ad(_SCVI_CKPT)      # checkpoint: scVI is the expensive part
     print('wrote scVI checkpoint:', _SCVI_CKPT)
 else:
@@ -249,8 +273,14 @@ print(f'aggregating across {len(masks)} librar(y/ies); output shape {X_out.shape
 
 for i, (lib, mask) in enumerate(masks, 1):
     t0 = time.time()
-    sub = adata[mask].copy()
-    cc.gr.aggregate_neighbors(sub, n_layers=N_LAYERS, use_rep=USE_REP, out_key=OUT_KEY)
+    # Copy only the graph and latent vectors, not every expression layer/raw.
+    sub = ad.AnnData(X=sp.csr_matrix((int(mask.sum()), 0)))
+    sub.obsm[USE_REP] = adata.obsm[USE_REP][mask].copy()
+    sub.obsp['spatial_connectivities'] = adata.obsp['spatial_connectivities'][mask][:, mask].copy()
+    cc.gr.aggregate_neighbors(
+        sub, n_layers=N_LAYERS, use_rep=USE_REP, out_key=OUT_KEY,
+        connectivity_key='spatial_connectivities', aggregations='mean',
+    )
     X_out[mask] = sub.obsm[OUT_KEY].astype(np.float32)
     print(f'  [{i}/{len(masks)}] {lib}: n={int(mask.sum()):>7d}  {time.time()-t0:6.1f}s')
     del sub
@@ -268,21 +298,40 @@ adata.write_h5ad(_AGG_CKPT)          # checkpoint: aggregation is memory-risky
 print('wrote aggregation checkpoint:', _AGG_CKPT)
 """),
             _code("""
-# --- sweep domain counts (GMM), write one CellCharter_<k> column per k ---
-from sklearn.mixture import GaussianMixture
+# --- CellCharter stability selection (documented ClusterAutoK API) ---
+if max(DOMAINS) + 1 >= adata.n_obs:
+    raise ValueError('Choose a smaller domain-count range for this dataset.')
+autok = cc.tl.ClusterAutoK(
+    n_clusters=(min(DOMAINS), max(DOMAINS)), max_runs=5,
+    # Use CellCharter's default GaussianMixture estimator (fit accepts arrays).
+    model_params={'batch_size': 1024,
+                  'trainer_params': {'accelerator': ACCELERATOR, 'devices': 1, 'enable_progress_bar': False}},
+)
+autok.fit(adata, use_rep='X_cellcharter')
+autok.save(str(_P(ANNOTATED_OUTPUT).with_suffix('')) + '.cellcharter_models')
+cc.pl.autok_stability(autok)
+print('Stability suggests:', autok.best_k, '— review before choosing PRIMARY_K.')
 
 for k in DOMAINS:
-    key = f'CellCharter_{k}'
-    gmm = GaussianMixture(n_components=k, covariance_type='diag', random_state=0)
-    adata.obs[key] = gmm.fit_predict(adata.obsm['X_cellcharter']).astype(str)
-    adata.obs[key] = adata.obs[key].astype('category')
-    print(f'fitted {key}')
-
-# Eyeball the CellCharter_<k> columns (e.g. sc.pl.embedding on 'spatial'), then set
-# PRIMARY_K above. 'spatial_domain' is the one KaroSpace uses as the main domain
-# annotation; every swept CellCharter_<k> is also exported for comparison.
-adata.obs['spatial_domain'] = adata.obs[f'CellCharter_{PRIMARY_K}']
-print(f"primary spatial_domain = CellCharter_{PRIMARY_K}")
+    adata.obs[f'CellCharter_{k}'] = autok.predict(adata, use_rep='X_cellcharter', k=k)
+# Subsample only the local display; clustering and saved annotations use ALL cells.
+plot_indices = np.random.default_rng(0).choice(adata.n_obs, min(20_000, adata.n_obs), replace=False)
+sc.pl.embedding(adata[plot_indices], basis='spatial',
+                color=[f'CellCharter_{k}' for k in DOMAINS], ncols=3)
+"""),
+            _md("""
+### Choose the primary domain count
+Review the stability curve and spatial plots above. Edit `PRIMARY_K` in the next
+cell, then run it and the final write cell. A suggestion is not biological ground
+truth. Run All intentionally stops here until you make a choice.
+"""),
+            _code("""
+# Set PRIMARY_K to a reviewed candidate, for example PRIMARY_K = 6.
+if PRIMARY_K is None or PRIMARY_K not in DOMAINS:
+    raise ValueError('Set PRIMARY_K to a reviewed candidate before writing spatial_domain.')
+adata.obs['spatial_domain'] = adata.obs[f'CellCharter_{PRIMARY_K}'].astype('category')
+adata.uns['karospace_cellcharter_primary_k'] = int(PRIMARY_K)
+print(f'Chosen primary spatial_domain: {PRIMARY_K}')
 print(adata.obs['spatial_domain'].value_counts().sort_index())
 """),
         ]
@@ -297,6 +346,12 @@ if hasattr(ad, 'settings') and hasattr(ad.settings, 'allow_write_nullable_string
 adata.write_h5ad(ANNOTATED_OUTPUT, compression='gzip')
 print('wrote', ANNOTATED_OUTPUT)
 """
+    if include_cellcharter:
+        write_cell = """
+if (PRIMARY_K is None or 'spatial_domain' not in adata.obs
+        or adata.uns.get('karospace_cellcharter_primary_k') != PRIMARY_K):
+    raise ValueError('Review and apply the primary domain selection before saving.')
+""" + write_cell
     annotations = "leiden" + (", spatial_domain, CellCharter_<k>" if include_cellcharter else "")
     cells += [
         _md("## 5. Write the annotated file"),

@@ -58,6 +58,7 @@ Prepare  — run_preprocess    add a leiden clustering when a raw file has no an
            generate_notebook  hand off heavier prep (CellCharter spatial domains) as a notebook the researcher runs.
            merge_sections    merge per-section files that lack sample metadata.
            split_sections    split multiple tissue pieces sharing one sample_id into per-piece sections (spatial gaps).
+           preview_sections  render LOCAL panels of the split proposal (web/app) so the researcher eyeballs the piece count before confirming.
 Enrich   — run_companion      pre-process (spatial graph / analytics) before export.
 Export   — run_export        run the export; read its exit code + errors and iterate.
 Deliver  — package_sidecar   turn a sidecar viewer into a single-file .karospace.
@@ -149,31 +150,37 @@ dataset as one section — never repurpose a cardinality-1 placeholder as the
 section key.
 
 ## 0c. Multi-piece rule — one sample_id, several physical tissue pieces
-A single Xenium/Visium capture often holds several separate tissue pieces on the
-same slide (e.g. "normal skin + keloid", or three replicate strips). They land in
-one file under one sample_id but sit millimetres apart, so a viewer keyed on
-sample_id crams every piece into one panel. You CANNOT see this in the schema —
-coordinates never cross the boundary — so you can never rule it out by looking.
-The rule that follows: NEVER pass a per-capture column (sample_id / library /
-slide / fov) straight to --section-key on a spatial dataset. Always split first.
+A capture can contain several separate tissue pieces; schema alone cannot tell
+whether it does. Ask the researcher whether panels should be separated. Preserve
+an existing, reviewed section column. Splitting is a proposal, not a mandatory
+step or proof of the number of pieces.
 
-1. Before exporting any spatial build, ASK the researcher how many pieces they see
-   per capture. If they give a count, run split_sections method="kmeans" k=<count>.
-   If they don't know, run method="auto" — it DISCOVERS the count from the spatial
-   gaps, which is exactly what you can't do yourself.
-2. Pass within=<the sample_id/library column> so pieces are found per sample and
-   never merge across samples. split_sections labels each cell's piece LOCALLY
-   into a new obs column (default 'section').
-3. It reports pieces-per-group and per-piece cell counts — ALWAYS relay those so
-   the researcher can confirm they match what they see on the slide.
-4. Export with --section-key set to the NEW column when any group split into >1
-   piece. If every group came back as a single piece, the original per-capture
-   column is fine — but you only know that because you ran the split.
-
-Running the split is close to free: on a capture that genuinely is one piece, auto
-just returns one piece per group (equivalent to the original column). Skipping it
-silently ships the crammed-panel bug, so run it on every spatial build — don't
-treat it as optional or wait to "suspect" multiple pieces.
+1. Use split_sections only for .h5ad with finite coordinates in obsm. For
+   SpatialData .zarr or coordinates stored only in obs, keep the supported export
+   path and explain that local preparation is needed if splitting is desired.
+2. Pass within=<capture/library column> to avoid mixing coordinate frames. Use
+   method="kmeans" only with a researcher-confirmed count that applies to every
+   group. Otherwise method="auto" proposes pieces from gaps. It can merge real
+   pieces, fragment tissue, or absorb small pieces, and is not cheap at all sizes.
+3. Before you ask the researcher how many pieces they see, SHOW them: call
+   preview_sections (same within=, same method) so local panels of the proposal
+   render on their screen — a count is far easier to confirm by sight than in the
+   abstract. The panels stay local; you get back only the aggregate proposed
+   count. Then ask the researcher to confirm or correct it from the picture. (In
+   a plain terminal there is no inline image; preview_sections still writes the
+   panels to disk and reports the paths, so relay those to open locally.)
+4. Relay aggregate counts and require local visual confirmation before using the
+   proposed column as --section-key. A single proposed piece is not proof that
+   there is only one. On split failure, keep the original file and offer local
+   review; do not block an otherwise valid export or repeatedly retry unchanged.
+5. Write a separate output with a NEW column; never overwrite original capture
+   or donor labels. Use the aliased returned key in subsequent tool calls.
+6. A tissue piece is NOT an independent biological replicate. When pseudobulk is
+   requested, explicitly pass --pseudobulk-replicate-annotation <true donor/sample
+   column>, even if it differs from --section-key. Confirm that this column
+   identifies independent biological units; a capture ID is not automatically a
+   donor ID. If no valid replicate column is known, use --pseudobulk off. The local
+   export check rejects generated piece columns as replicates.
 
 ## 1. Inspect first — always
 Call inspect_input on the file. For a .zarr with multiple tables, pass the table
@@ -268,14 +275,18 @@ DESIGN = """\
 - Default Wilcoxon markers run automatically for --main-cell-annotation plus any
   --statistics-additional-annotations. Add a second annotation (niche, region)
   when biologically meaningful.
+- Explicitly set --pseudobulk-replicate-annotation to a confirmed biological
+  replicate column whenever enabling pseudobulk. Generated tissue pieces must
+  never increase the replicate count. If the identity is uncertain, ask the
+  researcher or leave pseudobulk off.
 - --pseudobulk auto whenever the design PLAUSIBLY has >=2 biological replicates
   per group — you cannot verify per-group replicate counts from the schema (you
   see cardinalities, not the condition x replicate cross-tab), so do not try to.
   Prefer `auto` and let karospace's LOCAL guard decide per contrast: it enforces
   --pseudobulk-min-replicates (at least 2 always required) on the real counts and
   simply skips — does not error on — any contrast below threshold. The schema
-  signal for "plausibly replicated": a biological-sample column (section-key /
-  sample_id / animal / subject / patient) whose cardinality EXCEEDS the number of
+  signal for "plausibly replicated": a confirmed biological-sample column (donor /
+  animal / subject / patient; never generated tissue-piece labels) whose cardinality EXCEEDS the number of
   condition groups, i.e. more samples than conditions. Only leave pseudobulk off
   when the schema shows clearly one sample per group (sample cardinality ==
   condition cardinality) or there is no replicate/sample column at all — then it

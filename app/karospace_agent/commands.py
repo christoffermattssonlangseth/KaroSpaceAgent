@@ -31,6 +31,8 @@ STRUCTURE_SCRIPT = REPO_ROOT / "scripts" / "inspect_structure.py"
 GEO_SCRIPT = REPO_ROOT / "scripts" / "geo_fetch.py"
 PREPROCESS_SCRIPT = REPO_ROOT / "scripts" / "preprocess.py"
 SPLIT_SECTIONS_SCRIPT = REPO_ROOT / "scripts" / "split_sections.py"
+PREVIEW_SECTIONS_SCRIPT = REPO_ROOT / "scripts" / "preview_sections.py"
+PSEUDOBULK_CHECK_SCRIPT = REPO_ROOT / "scripts" / "check_pseudobulk.py"
 GEN_NOTEBOOK_SCRIPT = REPO_ROOT / "scripts" / "gen_notebook.py"
 
 # Default timeout for a full export (analytics + DE + pathway can be minutes on
@@ -527,6 +529,30 @@ def run_preprocess(
     return run(argv, timeout=timeout)
 
 
+def flag_value(flags: list[str], flag: str, default=None):
+    """Resolve a full CLI option, including --option=value and last-value wins."""
+    value = default
+    for i, token in enumerate(flags):
+        if token.startswith(flag + "="):
+            value = token[len(flag) + 1:]
+        elif token == flag:
+            value = flags[i + 1] if i + 1 < len(flags) and not flags[i + 1].startswith("--") else ""
+    return value
+
+
+def check_pseudobulk(input_path: str, flags: list[str]) -> RunResult | None:
+    if flag_value(flags, "--pseudobulk", "off").lower() == "off":
+        return None
+    replicate = flag_value(flags, "--pseudobulk-replicate-annotation")
+    if not replicate:
+        return RunResult(2, "", "pseudobulk_replicate_required")
+    return run([
+        merge_python(), str(PSEUDOBULK_CHECK_SCRIPT), input_path,
+        "--replicate", replicate,
+        "--table", flag_value(flags, "--spatialdata-table", ""),
+    ], timeout=60, stream=False)
+
+
 def run_split_sections(
     input_path: str,
     output: str,
@@ -549,6 +575,38 @@ def run_split_sections(
         merge_python(), str(SPLIT_SECTIONS_SCRIPT), input_path, "-o", output,
         "--method", method,
         "--key", key,
+        "--coords-key", coords_key,
+    ]
+    if within:
+        argv += ["--within", within]
+    if method == "kmeans":
+        argv += ["--k", str(k)]
+    return run(argv, timeout=timeout)
+
+
+def run_preview_sections(
+    input_path: str,
+    out_dir: str,
+    within: str = "",
+    method: str = "auto",
+    k: int = 0,
+    coords_key: str = "spatial",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run scripts/preview_sections.py — render local PNG panels of the split
+    proposal, one per capture group.
+
+    Reads coordinates LOCALLY and writes the images to `out_dir`. Its stdout
+    streams two marker kinds on the LOCAL progress channel: KAROSPACE_PREVIEW_IMG
+    (a local PNG path the UI renders) and PREVIEW_SECTIONS_JSON (aggregate piece
+    counts). The model receives only the aggregate counts — never a coordinate,
+    an image, or a group value.
+    """
+    if not PREVIEW_SECTIONS_SCRIPT.exists():
+        return RunResult(127, "", f"preview_sections script missing: {PREVIEW_SECTIONS_SCRIPT}")
+    argv = [
+        merge_python(), str(PREVIEW_SECTIONS_SCRIPT), input_path, "--out-dir", out_dir,
+        "--method", method,
         "--coords-key", coords_key,
     ]
     if within:

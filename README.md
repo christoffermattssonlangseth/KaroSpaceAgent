@@ -26,8 +26,8 @@ correct flags for a messy dataset — and *knowing which choices are right* take
 some spatial-transcriptomics expertise. The agent supplies that judgement: it
 inspects the data's metadata, reasons about the right parameters (which column is
 the section key, which is the main annotation, whether pseudobulk makes sense for
-the experimental design, …), separates co-captured tissue pieces that share one
-`sample_id` into their own sections from the spatial gaps alone, optionally
+the experimental design, …), can propose separate panels for co-captured tissue
+pieces for local review while preserving biological replicate identities, optionally
 enriches the file with [KaroSpaceCompanion](../KaroSpaceCompanion), runs the
 export, reads errors and iterates, validates the result, and runs a schema-only
 self-review of its own
@@ -238,9 +238,9 @@ python -m pip install -e ./app
 ```
 
 The project's `.codex/config.toml` connects the `karospace` stdio MCP server,
-exposing all 16 tools from the standalone app: inspection, GEO acquisition,
-R conversion, preparation (clustering, section splitting, notebook hand-off),
-enrichment, export, packaging, and validation.
+exposing all 17 tools from the standalone app: inspection, GEO acquisition,
+R conversion, preparation (clustering, section splitting, local split preview,
+notebook hand-off), enrichment, export, packaging, and validation.
 Restart Codex after setup, trust this project if prompted, and check `/mcp`
 for `karospace`. The server runs locally and makes no model calls; it needs
 no Claude login or Anthropic API key. Your Codex session supplies the model.

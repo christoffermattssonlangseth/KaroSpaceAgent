@@ -169,38 +169,39 @@ single section rather than forcing a placeholder: pass `--section-key ""` (an em
 value) and karospace exports the whole dataset as one section. Never repurpose a
 cardinality-1 column (e.g. `orig.ident`) as the section key.
 
-### 0c. Multi-piece rule — split before you key on a per-capture column
+### 0c. Separate tissue panels while preserving biological replicates
 
-A single Xenium/Visium capture often holds **several separate tissue pieces** on
-one slide (e.g. "normal skin + keloid", or three replicate strips). They land in
-one file under one `sample_id` but sit millimetres apart, so a viewer keyed on
-`sample_id` crams every piece into one panel. You **cannot see this in the
-schema** — coordinates never cross the boundary — so never pass a per-capture
-column (`sample_id` / `library` / `slide` / `fov`) straight to `--section-key` on
-a spatial dataset. **Always split first**, on every spatial build:
+A capture can contain several separate tissue pieces; schema alone cannot tell
+whether it does. Ask the researcher whether panels should be separated. Preserve
+an existing, reviewed section column. Splitting is a proposal, not a mandatory
+step or proof of the number of pieces.
 
-1. **Ask the researcher how many pieces they see per capture.** If they give a
-   count, split with `--method kmeans --k <count>`. If they don't know, use
-   `--method auto` — it *discovers* the count from the spatial gaps, which is
-   exactly what you can't do yourself.
-2. Pass `--within <sample_id/library column>` so pieces are found per sample and
-   never merge across samples. It writes a new obs column (default `section`),
-   running locally on disk — no coordinate leaves the machine:
-
-   ```bash
-   python scripts/split_sections.py /path/in.h5ad -o /path/split.h5ad \
-     --within sample_id --method auto --key section
-   ```
-
-3. It prints a `SPLIT_SECTIONS_JSON` summary of **pieces-per-group and per-piece
-   cell counts** — relay those so the researcher can confirm they match the slide.
-4. Build with `--section-key section` (the new column) when any group split into
-   >1 piece. If every group came back as a single piece, the original column is
-   fine — but you only know that because you ran the split.
-
-Running the split is close to free: on a capture that genuinely is one piece,
-`auto` just returns one piece per group. Skipping it silently ships the
-crammed-panel bug, so don't treat it as optional or wait to "suspect" pieces.
+1. Use split_sections only for .h5ad with finite coordinates in obsm. For
+   SpatialData .zarr or coordinates stored only in obs, keep the supported export
+   path and explain that local preparation is needed if splitting is desired.
+2. Pass within=<capture/library column> to avoid mixing coordinate frames. Use
+   method="kmeans" only with a researcher-confirmed count that applies to every
+   group. Otherwise method="auto" proposes pieces from gaps. It can merge real
+   pieces, fragment tissue, or absorb small pieces, and is not cheap at all sizes.
+3. Before asking the researcher how many pieces they see, render the proposal for
+   them: `scripts/preview_sections.py <in.h5ad> --out-dir <dir> --within <col>`
+   writes one PNG panel per capture group (cells coloured by proposed piece) to a
+   local directory. Point the researcher at those images so they confirm the count
+   by sight, not in the abstract. Only aggregate counts cross the boundary; the
+   panels stay local. (In the standalone web/app the `preview_sections` tool shows
+   the panels inline.)
+4. Relay aggregate counts and require local visual confirmation before using the
+   proposed column as --section-key. A single proposed piece is not proof that
+   there is only one. On split failure, keep the original file and offer local
+   review; do not block an otherwise valid export or repeatedly retry unchanged.
+5. Write a separate output with a NEW column; never overwrite original capture
+   or donor labels. Use the aliased returned key in subsequent tool calls.
+6. A tissue piece is NOT an independent biological replicate. When pseudobulk is
+   requested, explicitly pass --pseudobulk-replicate-annotation <true donor/sample
+   column>, even if it differs from --section-key. Confirm that this column
+   identifies independent biological units; a capture ID is not automatically a
+   donor ID. If no valid replicate column is known, use --pseudobulk off. The local
+   export check rejects generated piece columns as replicates.
 
 ### 1. Inspect first — always
 
@@ -267,7 +268,7 @@ carries annotations (most researcher-supplied files do).
 
 | Flag | How to pick it |
 | --- | --- |
-| `--section-key` | Column identifying each section/sample. Look for `sample_id`, `Sample Id`, `sample`, `section`, `slide`, `fov`, `library`, `condition`. Must be categorical, cardinality ~2–100. **A candidate with cardinality 1 is a placeholder** (e.g. `orig.ident`, the Seurat default when never set) — that is *not* a real section key. For a genuinely single-section dataset (no real section column, no siblings to merge — see §0), pass `--section-key ""` (empty) so karospace exports the whole dataset as one section; prefer that over forcing a placeholder. **On a spatial dataset, never key on a per-capture column without running the split first (see §0c)** — one `sample_id` can hold several physical tissue pieces you can't see in the schema. |
+| `--section-key` | Column identifying each section/sample. Look for `sample_id`, `Sample Id`, `sample`, `section`, `slide`, `fov`, `library`, `condition`. Must be categorical, cardinality ~2–100. **A candidate with cardinality 1 is a placeholder** (e.g. `orig.ident`, the Seurat default when never set) — that is *not* a real section key. For a genuinely single-section dataset (no real section column, no siblings to merge — see §0), pass `--section-key ""` (empty) so karospace exports the whole dataset as one section; prefer that over forcing a placeholder. **For multi-piece captures, offer a locally reviewed split (see §0c)**. Keep the true biological replicate column separate from display sections. |
 | `--main-cell-annotation` | Primary cell-type column. Prefer a human-readable `cell_type`/`celltype`/`annotation` over clustering when both exist. If only clustering exists, use a mid-resolution one (the plain `leiden` if present) as primary — the rest stay exposed via `--cell-annotations`. |
 | `--section-metadata` | Categorical experimental variables to show as filter chips: `condition`, `stage`, `timepoint`, `region`, `sex`, `genotype`, `treatment`, `model`, `batch`. Pick the ones that vary across sections. |
 | `--cell-annotations` | **Expose EVERY analysis-derived cell annotation, not a curated subset** — users switch between them, so a missed one is a missed view. **Principle (apply it, don't just match names):** a cell annotation is any obs column assigning each cell to a discrete group produced by analysis — clustering, cell-typing, or spatial-domain/niche detection — at any resolution or k. The families are *illustrative, not a whitelist*; catch methods not listed too: clustering (`leiden`, `louvain`, `kmeans`, `walktrap`, `phenograph`, `SNN`, `mclust`, and `<method>_<resolution>` families like `leiden_0_2`…`leiden_4_0`); cell-typing (`cell_type`, `annotation`, `subtype`, `predicted.*`, SingleR/Azimuth-style labels); spatial domains/niches (`CellCharter`, `niche`, `domain`, `UTAG`, `Banksy`, and `<method>_<k>` families like `CellCharter_6`…`CellCharter_30`). The **structural test** is the real net: include any categorical (or low-cardinality integer) obs column, cardinality ~2–300, that isn't an experimental variable (→ `--section-metadata`), an ID (cardinality ≈ cell count, e.g. `cell_id`), or a QC metric. **When unsure, include it.** Never expose ID columns or per-cell continuous QC numerics. **Exception:** columns prefixed `karospace_` (e.g. `karospace_polygon_labels`, `karospace_polygon_count`) and prior-session region/polygon indices (e.g. `polygon_index`) are KaroSpace's *own* round-tripped output from an earlier session, not independent annotations — do **not** sweep them in; mention them so the user can opt in, but leave them out by default. |
@@ -280,6 +281,9 @@ carries annotations (most researcher-supplied files do).
 - Default Wilcoxon markers run automatically for `--main-cell-annotation` plus any
   `--statistics-additional-annotations`. Add a second annotation (e.g. `niche`,
   `region`) when it's biologically meaningful.
+- Always explicitly set `--pseudobulk-replicate-annotation` to a confirmed
+  biological replicate column. If that identity is unknown, ask or leave
+  pseudobulk off; piece counts cannot establish biological replication.
 - **Pseudobulk (`--pseudobulk auto`) whenever the design *plausibly* has ≥2
   biological replicates per group.** You cannot verify per-group replicate counts
   from the schema (you see cardinalities, not the `condition × replicate`
@@ -287,8 +291,8 @@ carries annotations (most researcher-supplied files do).
   decide per contrast: it enforces `--pseudobulk-min-replicates` (≥2 always
   required) on the real counts and *skips* — does not error on — any contrast
   below threshold. The schema signal for "plausibly replicated": a
-  biological-sample column (`--section-key` / `sample_id` / `animal` / `subject` /
-  `patient`) whose cardinality **exceeds the number of condition groups** (more
+  confirmed biological-sample column (`donor` / `animal` / `subject` /
+  `patient`, never generated tissue-piece labels) whose cardinality **exceeds the number of condition groups** (more
   samples than conditions). Leave pseudobulk off only when the schema clearly
   shows one sample per group (sample cardinality == condition cardinality) or
   there's no replicate/sample column — then it's meaningless. When unsure, pass

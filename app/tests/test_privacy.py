@@ -86,13 +86,38 @@ def test_split_sections_forwards_only_aggregate_piece_counts():
               '{"pieces": 2, "sizes": [7, 2]}]}\n')
     data = payload(boundary.filter("split_sections", {}, {}, raw(stdout)))
     assert data["n_sections"] == 5 and data["n_groups"] == 2
-    assert data["method"] == "auto" and data["key"] == "section"
+    assert data["method"] == "auto" and data["key"] == "col_1"
+    assert boundary.decode({"key": data["key"]})["key"] == "section"
+    assert data["requires_local_review"] and not data["biological_replicates"]
     assert data["groups"] == [{"pieces": 3, "sizes": [5, 4, 1]},
                               {"pieces": 2, "sizes": [7, 2]}]
 
 
 def test_split_sections_without_summary_fails_closed():
     response = Boundary().filter("split_sections", {}, {}, raw("no summary here"))
+    assert response["is_error"]
+    assert payload(response)["diagnostic"] == "schema_unavailable"
+
+
+def test_split_sections_never_returns_decoded_private_key():
+    boundary = Boundary()
+    key = boundary.alias(PRIVATE, "col")
+    local = boundary.decode({"key": key})
+    summary = {"n_sections": 1, "n_groups": 1, "method": "auto",
+               "key": local["key"], "groups": [{"pieces": 1, "sizes": [10]}]}
+    data = payload(boundary.filter("split_sections", {"key": key}, local,
+                                   raw("SPLIT_SECTIONS_JSON " + json.dumps(summary))))
+    assert data["key"] == key
+
+
+@pytest.mark.parametrize("update", [{}, {"method": PRIVATE}, {"n_sections": True},
+                                   {"groups": [{"pieces": 2, "sizes": [5]}]},
+                                   {"groups": [{"pieces": 1, "sizes": ["5"]}]}])
+def test_invalid_split_summaries_fail_closed(update):
+    summary = {"n_sections": 1, "n_groups": 1, "method": "auto", "key": "section",
+               "groups": [{"pieces": 1, "sizes": [5]}]}
+    summary = (summary | update) if update else {}
+    response = Boundary().filter("split_sections", {}, {}, raw("SPLIT_SECTIONS_JSON " + json.dumps(summary)))
     assert response["is_error"]
     assert payload(response)["diagnostic"] == "schema_unavailable"
 

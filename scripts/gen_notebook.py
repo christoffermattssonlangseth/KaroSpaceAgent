@@ -58,9 +58,12 @@ def build_notebook(
     genes = genes or []
     annotated = str(Path(input_path).with_name(Path(input_path).stem + "_annotated.h5ad"))
     section_repr = repr(section_key) if section_key else "None"
+    primary_k = domains_min + (domains_max - domains_min) // 2
     domains_line = (
-        f"\nDOMAINS_RANGE = ({domains_min}, {domains_max})  "
-        "# candidate #spatial domains for the stability selection"
+        f"\nDOMAINS = list(range({domains_min}, {domains_max} + 1))  "
+        "# candidate #spatial-domain counts to sweep; eyeball the plots, then pick"
+        f"\nPRIMARY_K = {primary_k}  "
+        "# which swept k becomes the primary 'spatial_domain' column (change after eyeballing)"
         if include_cellcharter else ""
     )
 
@@ -83,12 +86,15 @@ Install into your analysis env (skip what you already have):
 
 ```
 pip install scanpy leidenalg igraph
-{"pip install cellcharter scvi-tools squidpy  # heavy; GPU recommended" if include_cellcharter else ""}
+{"pip install cellcharter scvi-tools squidpy scikit-learn torch  # heavy; GPU strongly recommended" if include_cellcharter else ""}
 ```
 {(
-    "The spatial-domain step is heavier than the in-agent path and a GPU makes "
-    "scVI much faster. CellCharter's API is version-sensitive — if a call below "
-    "differs from your installed version, check the docs: " + CELLCHARTER_DOCS
+    "The spatial-domain step is far heavier than the in-agent path: on ~1M+ cells "
+    "scVI trains for hours, so run it on a machine with a GPU (CUDA or Apple MPS). "
+    "It checkpoints after scVI and after aggregation — if a later cell fails, "
+    "reload the checkpoint instead of retraining. CellCharter's API is "
+    "version-sensitive — if a call below differs from your installed version, "
+    "check the docs: " + CELLCHARTER_DOCS
 ) if include_cellcharter else ""}
 """),
         _code(f"""
@@ -157,10 +163,21 @@ print(adata.obs['leiden'].value_counts().sort_index())
 ## 4. Spatial domains (CellCharter)
 
 CellCharter finds tissue domains by clustering each cell's *neighbourhood*
-representation. The canonical workflow: a scVI latent space, spatial neighbours,
-neighbourhood aggregation, then GMM clustering whose cluster count is chosen by a
-stability sweep over `DOMAINS_RANGE`. API is version-sensitive — see
-{CELLCHARTER_DOCS}. Needs `obsm['spatial']` (a KaroSpace-ingestible file has it).
+representation: an scVI latent space → a spatial neighbour graph → multi-hop
+neighbourhood aggregation → GMM clustering over a range of domain counts. API is
+version-sensitive — see {CELLCHARTER_DOCS}. Needs `obsm['spatial']` (a
+KaroSpace-ingestible file has it).
+
+**This stage is heavy and long** — on ~1M+ cells scVI training runs for hours
+(a GPU is strongly recommended) and the aggregation is memory-hungry. The cells
+below therefore:
+- train scVI on the seurat_v3 HVGs of the raw `counts` (not all genes),
+- **write checkpoints** after scVI and after aggregation so a crash never costs
+  the whole run — re-run from the last checkpoint,
+- **aggregate per library** (the spatial graph is block-diagonal by section, so
+  this is identical to the full-object call but caps peak RAM at the largest
+  section — the naive full-object call OOMs at ~1.4M cells),
+- sweep several domain counts and let you eyeball them before picking `PRIMARY_K`.
 """),
             _code("""
 import scvi
@@ -168,30 +185,104 @@ import squidpy as sq
 import cellcharter as cc
 
 scvi.settings.seed = 0
+LIBRARY_KEY = SECTION_KEY if (SECTION_KEY and SECTION_KEY in adata.obs) else None
 
-# --- scVI latent space (trained on raw counts) ---
-scvi.model.SCVI.setup_anndata(
-    adata, layer='counts',
-    batch_key=SECTION_KEY if SECTION_KEY in adata.obs else None,
-)
-model = scvi.model.SCVI(adata)
-model.train(early_stopping=True)
-adata.obsm['X_scVI'] = model.get_latent_representation()
+# Checkpoint paths derived from the output — reload to skip a finished stage.
+from pathlib import Path as _P
+_SCVI_CKPT = str(_P(ANNOTATED_OUTPUT).with_suffix('')) + '.post_scvi.h5ad'
+_AGG_CKPT = str(_P(ANNOTATED_OUTPUT).with_suffix('')) + '.post_aggregate.h5ad'
 
-# --- spatial neighbourhood graph (per section if we have one) ---
+# Pick the fastest accelerator actually available.
+try:
+    import torch
+    ACCELERATOR = ('cuda' if torch.cuda.is_available()
+                   else 'mps' if torch.backends.mps.is_available() else 'cpu')
+except Exception:
+    ACCELERATOR = 'auto'
+print('scVI accelerator:', ACCELERATOR)
+"""),
+            _code("""
+# --- scVI latent space (trained on seurat_v3 HVGs of the raw counts) ---
+if 'X_scVI' not in adata.obsm:
+    if 'highly_variable' not in adata.var.columns:
+        n_top = min(5000, adata.n_vars)
+        sc.pp.highly_variable_genes(
+            adata, flavor='seurat_v3', n_top_genes=n_top, subset=False, layer='counts',
+        )
+    adata_hvg = adata[:, adata.var.highly_variable].copy()
+    scvi.model.SCVI.setup_anndata(
+        adata_hvg, layer='counts',
+        batch_key=LIBRARY_KEY if LIBRARY_KEY in adata_hvg.obs else None,
+    )
+    model = scvi.model.SCVI(adata_hvg)
+    model.train(max_epochs=1000, early_stopping=True, accelerator=ACCELERATOR)
+    adata.obsm['X_scVI'] = model.get_latent_representation()
+    adata.write_h5ad(_SCVI_CKPT)      # checkpoint: scVI is the expensive part
+    print('wrote scVI checkpoint:', _SCVI_CKPT)
+else:
+    print('X_scVI already present — skipping training')
+"""),
+            _code("""
+# --- spatial neighbour graph (per section; no edges between sections) ---
 sq.gr.spatial_neighbors(
-    adata, coord_type='generic', delaunay=True,
-    library_key=SECTION_KEY if SECTION_KEY in adata.obs else None,
+    adata, coord_type='generic', delaunay=True, library_key=LIBRARY_KEY,
 )
 cc.gr.remove_long_links(adata)
-cc.gr.aggregate_neighbors(adata, n_layers=3, use_rep='X_scVI', out_key='X_cellcharter')
+"""),
+            _code("""
+# --- neighbourhood aggregation, per library (memory-safe) ---
+# The full-object cc.gr.aggregate_neighbors densifies multi-hop graph powers and
+# OOMs at ~1.4M cells. The graph is block-diagonal by LIBRARY_KEY, so aggregating
+# each section separately is mathematically identical but caps peak RAM.
+import time
 
-# --- pick the number of domains by stability, then assign ---
-autok = cc.tl.ClusterAutoK(n_clusters=DOMAINS_RANGE, max_runs=5)
-autok.fit(adata, use_rep='X_cellcharter')
-adata.obs['spatial_domain'] = autok.predict(adata, use_rep='X_cellcharter', k=autok.best_k)
-adata.obs['spatial_domain'] = adata.obs['spatial_domain'].astype('category')
-print(f"chosen #domains: {autok.best_k}")
+N_LAYERS, USE_REP, OUT_KEY = 3, 'X_scVI', 'X_cellcharter'
+latent_dim = adata.obsm[USE_REP].shape[1]
+X_out = np.full((adata.n_obs, (N_LAYERS + 1) * latent_dim), np.nan, dtype=np.float32)
+
+if LIBRARY_KEY:
+    libraries = list(adata.obs[LIBRARY_KEY].unique())
+    masks = [(str(lib), (adata.obs[LIBRARY_KEY] == lib).values) for lib in libraries]
+else:
+    masks = [('all', np.ones(adata.n_obs, dtype=bool))]
+print(f'aggregating across {len(masks)} librar(y/ies); output shape {X_out.shape}')
+
+for i, (lib, mask) in enumerate(masks, 1):
+    t0 = time.time()
+    sub = adata[mask].copy()
+    cc.gr.aggregate_neighbors(sub, n_layers=N_LAYERS, use_rep=USE_REP, out_key=OUT_KEY)
+    X_out[mask] = sub.obsm[OUT_KEY].astype(np.float32)
+    print(f'  [{i}/{len(masks)}] {lib}: n={int(mask.sum()):>7d}  {time.time()-t0:6.1f}s')
+    del sub
+
+adata.obsm[OUT_KEY] = X_out
+
+# --- correctness checks (fail loud if per-library indexing is wrong) ---
+assert not np.isnan(X_out).any(axis=1).any(), 'some cells got no aggregated row'
+assert np.isfinite(X_out).all(), 'non-finite values in X_cellcharter'
+# Layer 0 (0-hop) must equal each cell's own scVI vector.
+assert np.allclose(X_out[:, :latent_dim], adata.obsm[USE_REP].astype(np.float32), atol=1e-5), \\
+    'layer-0 slice != X_scVI — per-library output is misaligned'
+
+adata.write_h5ad(_AGG_CKPT)          # checkpoint: aggregation is memory-risky
+print('wrote aggregation checkpoint:', _AGG_CKPT)
+"""),
+            _code("""
+# --- sweep domain counts (GMM), write one CellCharter_<k> column per k ---
+from sklearn.mixture import GaussianMixture
+
+for k in DOMAINS:
+    key = f'CellCharter_{k}'
+    gmm = GaussianMixture(n_components=k, covariance_type='diag', random_state=0)
+    adata.obs[key] = gmm.fit_predict(adata.obsm['X_cellcharter']).astype(str)
+    adata.obs[key] = adata.obs[key].astype('category')
+    print(f'fitted {key}')
+
+# Eyeball the CellCharter_<k> columns (e.g. sc.pl.embedding on 'spatial'), then set
+# PRIMARY_K above. 'spatial_domain' is the one KaroSpace uses as the main domain
+# annotation; every swept CellCharter_<k> is also exported for comparison.
+adata.obs['spatial_domain'] = adata.obs[f'CellCharter_{PRIMARY_K}']
+print(f"primary spatial_domain = CellCharter_{PRIMARY_K}")
 print(adata.obs['spatial_domain'].value_counts().sort_index())
 """),
         ]
@@ -206,7 +297,7 @@ if hasattr(ad, 'settings') and hasattr(ad.settings, 'allow_write_nullable_string
 adata.write_h5ad(ANNOTATED_OUTPUT, compression='gzip')
 print('wrote', ANNOTATED_OUTPUT)
 """
-    annotations = "leiden" + (", spatial_domain" if include_cellcharter else "")
+    annotations = "leiden" + (", spatial_domain, CellCharter_<k>" if include_cellcharter else "")
     cells += [
         _md("## 5. Write the annotated file"),
         _code(write_cell),

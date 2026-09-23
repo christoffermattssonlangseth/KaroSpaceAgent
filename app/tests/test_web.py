@@ -184,6 +184,65 @@ def test_conversation_survives_a_failing_turn():
     asyncio.run(main())
 
 
+# Stand-in PNG bytes: the front end only reads the file and base64-encodes it,
+# so the PNG magic header plus any payload is enough to exercise the path.
+_PNG_1X1 = b"\x89PNG\r\n\x1a\n" + b"local-preview-panel-bytes"
+
+
+def test_conversation_shows_a_local_preview_as_an_image_event(tmp_path):
+    async def main():
+        hub = web.Hub()
+        convo = web.Conversation(hub, FakeSession)
+        await convo.start()
+        session = FakeSession.instances[0]
+        root = tmp_path / "session_out"
+        root.mkdir()
+        session.boundary.output_root = root
+        panel = root / "panel_1.png"
+        panel.write_bytes(_PNG_1X1)
+
+        marker = web.PREVIEW_IMG_MARKER + json.dumps(
+            {"path": str(panel), "group": 1, "pieces": 3})
+        convo._on_progress("stdout", marker + "\n")
+        await asyncio.sleep(0)  # let the threadsafe publish land
+
+        images = [e for e in hub.events if e["type"] == "image"]
+        assert len(images) == 1
+        assert images[0]["src"].startswith("data:image/png;base64,")
+        assert images[0]["group"] == 1 and images[0]["pieces"] == 3
+        # The marker line is consumed, not dumped into the export log, and the
+        # local path never appears anywhere in the transcript.
+        assert not any(e["type"] == "progress" for e in hub.events)
+        assert str(panel) not in json.dumps(hub.events)
+        await convo.stop()
+
+    asyncio.run(main())
+
+
+def test_conversation_drops_a_preview_outside_the_session_dir(tmp_path):
+    async def main():
+        hub = web.Hub()
+        convo = web.Conversation(hub, FakeSession)
+        await convo.start()
+        session = FakeSession.instances[0]
+        session.boundary.output_root = tmp_path / "session_out"
+        (tmp_path / "session_out").mkdir()
+        # A real PNG, but sitting OUTSIDE the session output dir: refuse to serve it.
+        outsider = tmp_path / "elsewhere.png"
+        outsider.write_bytes(_PNG_1X1)
+
+        marker = web.PREVIEW_IMG_MARKER + json.dumps(
+            {"path": str(outsider), "group": 1, "pieces": 2})
+        convo._on_progress("stdout", marker + "\n")
+        await asyncio.sleep(0)
+
+        assert not any(e["type"] == "image" for e in hub.events)
+        assert not any(e["type"] == "progress" for e in hub.events)
+        await convo.stop()
+
+    asyncio.run(main())
+
+
 async def _until(pred, timeout=2.0):
     deadline = asyncio.get_running_loop().time() + timeout
     while not pred():

@@ -21,10 +21,12 @@ textarea, and the page says so.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 from collections.abc import AsyncIterator, Callable
 from importlib import resources
+from pathlib import Path
 
 from . import agent, auth
 
@@ -40,6 +42,13 @@ except ImportError as e:  # pragma: no cover - exercised only without the extra
 
 HEARTBEAT_SECONDS = 15
 MAX_PROGRESS_EVENTS = 5_000  # keep the replay bounded on very chatty exports
+
+# The section-preview render script prints one of these per panel on its stdout.
+# It rides the LOCAL progress channel (never the model boundary); the front end
+# reads the referenced PNG off local disk and shows it. The marker carries a
+# local path + aggregate meta only — no coordinate, no group value.
+PREVIEW_IMG_MARKER = "KAROSPACE_PREVIEW_IMG "
+MAX_PREVIEW_BYTES = 8 * 1024 * 1024  # skip an implausibly large "panel"
 
 
 class Hub:
@@ -159,9 +168,40 @@ class Conversation:
             self.hub.publish({"type": "tool", "text": text})
 
     def _on_progress(self, stream: str, line: str) -> None:
+        line = line.rstrip("\n")
+        # A section-preview panel: read the local PNG and push it as an image
+        # event instead of dumping the marker into the export log. The bytes
+        # never touch the model boundary — this is the local channel only.
+        if stream == "stdout" and line.startswith(PREVIEW_IMG_MARKER):
+            event = self._preview_image_event(line[len(PREVIEW_IMG_MARKER):].strip())
+            if event is not None:
+                self.hub.publish_threadsafe(event)
+            return
         self.hub.publish_threadsafe(
-            {"type": "progress", "stream": stream, "line": line.rstrip("\n")}
+            {"type": "progress", "stream": stream, "line": line}
         )
+
+    def _preview_image_event(self, payload: str) -> dict | None:
+        """Turn a preview marker into an inline image event, reading the PNG off
+        local disk. Returns None (drop it) if anything looks off. The path is
+        confined to this session's output dir, so nothing outside it is served."""
+        try:
+            meta = json.loads(payload)
+            path = Path(meta["path"]).resolve()
+            root = Path(self._session.boundary.output_root).resolve()
+            if root not in path.parents or path.suffix.lower() != ".png":
+                return None
+            raw = path.read_bytes()
+        except Exception:  # noqa: BLE001 - a bad marker just isn't shown
+            return None
+        if not raw or len(raw) > MAX_PREVIEW_BYTES:
+            return None
+        src = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+        return {
+            "type": "image", "src": src,
+            "group": int(meta.get("group", 0)),
+            "pieces": int(meta.get("pieces", 0)),
+        }
 
 
 def _sse(event: dict) -> str:

@@ -14,9 +14,9 @@ how many cells each holds.
 
 Two detection methods:
 
-  auto (default)  Density gap detection (DBSCAN). Discovers the NUMBER of pieces
+  auto (default)  Density gap detection (DBSCAN). Proposes the number of pieces
                   from the large empty gaps between them — no need to know it in
-                  advance. The right default when nobody has eyeballed the slide.
+                  advance. Local visual review is still required.
   kmeans          K-means with a known K per group. Use when the researcher has
                   looked at the capture and can say "there are 3 pieces here",
                   which is the classic workflow this replaces.
@@ -39,9 +39,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 import anndata as ad
 import numpy as np
+
+MAX_NEIGHBOR_LINKS = 20_000_000
 
 # Some inputs (e.g. GEO-assembled Xenium) carry pandas nullable StringArray obs
 # columns that newer anndata refuses to write unless opted in. We only add a
@@ -64,7 +67,10 @@ def _coords(adata, key: str) -> np.ndarray:
     xy = np.asarray(adata.obsm[key])
     if xy.ndim != 2 or xy.shape[1] < 2:
         raise SystemExit(f"no spatial coordinates: obsm['{key}'] is not 2-D points")
-    return xy[:, :2].astype(float)
+    xy = xy[:, :2].astype(float)
+    if len(xy) == 0 or not np.isfinite(xy).all():
+        raise SystemExit("split_invalid_coordinates: need nonempty, finite coordinates")
+    return xy
 
 
 def _typical_spacing(xy: np.ndarray, rng: np.random.Generator) -> float:
@@ -75,7 +81,11 @@ def _typical_spacing(xy: np.ndarray, rng: np.random.Generator) -> float:
     """
     from scipy.spatial import cKDTree
 
+    # Duplicated centroids are valid, but zero NN distances cannot define eps.
+    xy = np.unique(xy, axis=0)
     n = xy.shape[0]
+    if n < 2:
+        return 0.0
     idx = rng.choice(n, size=min(n, 5000), replace=False)
     tree = cKDTree(xy)
     # k=2: self (distance 0) + the true nearest neighbour.
@@ -104,6 +114,14 @@ def _auto_labels(xy: np.ndarray, eps: float, min_samples: int, min_cells: int) -
     `min_cells` into the nearest substantial piece, so a handful of stray cells
     never counts as its own section."""
     from sklearn.cluster import DBSCAN
+    from scipy.spatial import cKDTree
+
+    # sklearn materializes radius neighbours. Estimate their size before an
+    # unexpectedly dense radius can exhaust RAM on a million-cell capture.
+    probe = np.linspace(0, len(xy) - 1, min(len(xy), 1000), dtype=int)
+    degree = cKDTree(xy).query_ball_point(xy[probe], eps, return_length=True)
+    if float(np.mean(degree)) * len(xy) > MAX_NEIGHBOR_LINKS:
+        raise SystemExit("split_density_too_high: use a smaller --eps or review a local subset")
 
     labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(xy)
     uniq, counts = np.unique(labels[labels >= 0], return_counts=True)
@@ -119,7 +137,8 @@ def _auto_labels(xy: np.ndarray, eps: float, min_samples: int, min_cells: int) -
 def _kmeans_labels(xy: np.ndarray, k: int) -> np.ndarray:
     from sklearn.cluster import KMeans
 
-    k = max(1, min(k, xy.shape[0]))
+    if k < 1 or k > len(np.unique(xy, axis=0)):
+        raise SystemExit("split_invalid_count: k must not exceed the distinct positions")
     return KMeans(n_clusters=k, n_init=10, random_state=0).fit_predict(xy)
 
 
@@ -140,6 +159,8 @@ def split(adata, coords_key, within, method, k, eps, min_samples, gap_factor, mi
         raise SystemExit(f"group column not found: obs has no '{within}'")
 
     if within:
+        if adata.obs[within].isna().any():
+            raise SystemExit("split_missing_groups: assign missing capture groups locally first")
         groups = adata.obs[within].astype(str)
         order = list(dict.fromkeys(groups))           # first-seen order, stable
     else:
@@ -157,7 +178,10 @@ def split(adata, coords_key, within, method, k, eps, min_samples, gap_factor, mi
             used_eps = None
         else:
             used_eps = eps if eps is not None else _typical_spacing(xy, rng) * gap_factor
-            labels = _auto_labels(xy, used_eps, min_samples, min_cells)
+            if len(xy) < min_samples or len(np.unique(xy, axis=0)) == 1:
+                labels = np.zeros(len(xy), dtype=int)
+            else:
+                labels = _auto_labels(xy, used_eps, min_samples, min_cells)
         names, sizes = _rename_by_size(labels, prefix)
         out[mask] = names
         tag = f"group {gi + 1}" if within else "all cells"
@@ -188,10 +212,20 @@ def main() -> None:
 
     if args.method == "kmeans" and args.k < 1:
         raise SystemExit("--k must be >= 1 when --method kmeans")
+    if (args.eps is not None and (not np.isfinite(args.eps) or args.eps <= 0)
+            or not np.isfinite(args.gap_factor) or args.gap_factor <= 0
+            or args.min_samples < 1 or args.min_cells < 1):
+        raise SystemExit("split_invalid_parameters: radii and counts must be positive and finite")
+    if Path(args.input).suffix.lower() != ".h5ad":
+        raise SystemExit("split_input_unsupported: splitting requires .h5ad with obsm coordinates")
+    if Path(args.input).resolve() == Path(args.output).resolve():
+        raise SystemExit("split_existing_column: write a separate file to preserve the source")
 
     rng = np.random.default_rng(0)
     log(f"loading {args.input}")
     adata = ad.read_h5ad(args.input)
+    if args.key in adata.obs:
+        raise SystemExit("split_existing_column: choose a new column; existing labels are preserved")
     within = args.within.strip()
     log(f"coords key: {args.coords_key}; within: {within or '(whole file)'}; method: {args.method}")
 
@@ -202,8 +236,13 @@ def main() -> None:
     cats = sorted(set(labels))
     adata.obs[args.key] = np.asarray(labels)
     adata.obs[args.key] = adata.obs[args.key].astype("category")
+    provenance = dict(adata.uns.get("karospace_section_split", {}))
+    previous = list(provenance.get("section_keys", []))
+    provenance["section_keys"] = list(dict.fromkeys([*previous, args.key]))
+    adata.uns["karospace_section_split"] = provenance
     n_sections = len(cats)
     log(f"wrote section column '{args.key}' with {n_sections} categories")
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     adata.write_h5ad(args.output)
     log(f"wrote: {args.output}")
 

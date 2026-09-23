@@ -91,6 +91,31 @@ Remove identifying prose; quote paths that contain spaces. Cancelled drafts
 are not sent. Programmatic `agent.run()` callers must supply an async `review`
 callback; `Session.send()` accepts only a one-use approval from its boundary.
 
+### Tissue pieces, replicates, and notebook review
+
+Section splitting is optional and currently supports `.h5ad` with coordinates in
+`obsm`. The proposed pieces need local visual review; auto mode can merge real
+pieces or absorb small pieces. Original columns and the source file are preserved.
+Unsupported inputs keep the normal export route. Dense auto neighbourhoods stop
+with `split_density_too_high` rather than attempting a large allocation; use a
+locally reviewed smaller `--eps` in the script, or a confirmed count with k-means.
+
+Pseudobulk exports require an explicit `--pseudobulk-replicate-annotation` naming
+confirmed biological units. A local check rejects generated piece columns using
+provenance in `uns['karospace_section_split']`. This does not infer whether an
+arbitrary column really represents independent donors; that remains a scientific
+choice. Older split files lack this provenance: select the original donor/sample
+column explicitly or leave pseudobulk off.
+
+Generated CellCharter notebooks use the documented `ClusterAutoK` stability
+workflow, with local plots and no default primary domain count. Set `PRIMARY_K`
+after review; the final write is blocked until the selection has been applied.
+scVI selects its raw-count HVGs independently of Leiden (all genes for panels up
+to 5,000 features). Checkpoints support nullable string metadata. The per-library
+aggregation copies only latent vectors and the graph; training still needs enough
+RAM/GPU memory and the installed CellCharter/scVI dependencies. See the notebook
+for checkpoint recovery instructions.
+
 ### Browser mode
 
 ```bash
@@ -119,7 +144,7 @@ default and no auth: it is a local app with a browser window, not a service.
 | `agent.py` | Provider selection and Claude options/session; one-shot builds. |
 | `codex.py` | Codex app-server connection, conversation state, tool dispatch and interruption. |
 | `tool_worker.py` | Validates and executes one existing tool in a cancellable local worker; the parent filters reports before they reach Codex. |
-| `mcp.py` | Serves the same 16 sanitizing tools over stdio for Codex and other MCP clients; no model session or Claude authentication. |
+| `mcp.py` | Serves the same 17 sanitizing tools over stdio for Codex and other MCP clients; no model session or Claude authentication. |
 | `auth.py` | Detects which credential the CLI subprocess will use and whether it is permitted; no secret is read. |
 | `cli.py` | `karospace-agent build <input> "<intent>"`, `karospace-agent chat [input] ["<intent>"]` (the REPL), `karospace-agent web`, and `karospace-agent auth`. |
 | `web.py` | The browser front end: Starlette app, SSE event hub, one-turn-at-a-time worker (optional `[web]` extra). |

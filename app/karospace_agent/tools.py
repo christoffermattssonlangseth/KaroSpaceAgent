@@ -333,9 +333,9 @@ async def run_preprocess(args: dict[str, Any]) -> dict[str, Any]:
     "share one sample_id but sit millimetres apart, so a viewer keyed on sample_id "
     "crams them into one panel. This assigns each cell to its piece from the "
     "spatial coordinates alone and writes an obs column to use as --section-key. "
-    "Method 'auto' (default) DISCOVERS how many pieces there are from the empty "
-    "gaps between them — use it when nobody has eyeballed the slide, since you "
-    "cannot see the coordinates. Method 'kmeans' takes a known count k per group — "
+    "Method 'auto' (default) PROPOSES pieces from the empty "
+    "gaps between them; require local visual confirmation before using the labels. "
+    "Method 'kmeans' takes a known count k per group — "
     "use it only when the researcher tells you how many pieces a capture has. Set "
     "'within' to an existing grouping column (usually 'sample_id') so pieces are "
     "found per sample and never bleed across samples that share a coordinate "
@@ -343,7 +343,9 @@ async def run_preprocess(args: dict[str, Any]) -> dict[str, Any]:
     "LOCALLY; you receive only the aggregate result (pieces per group + per-piece "
     "cell counts), never a coordinate. Errors with 'spatial_coordinates_missing' "
     "if the file has no coordinates. After it finishes, inspect_input the output "
-    "and export with --section-key set to this column.",
+    "and export with --section-key set to this column only after local review. "
+    "Supports .h5ad with obsm coordinates only. Preserve existing columns. "
+    "Generated pieces must NEVER be used as biological pseudobulk replicates.",
     {
         "input_path": Annotated[str, "Input .h5ad with spatial coordinates in obsm."],
         "output": Annotated[str, "Output .h5ad path (with the new section column)."],
@@ -372,6 +374,50 @@ async def split_sections(args: dict[str, Any]) -> dict[str, Any]:
         coords_key=coords_key,
     )
     return _report(rr, f"split_sections.py {args['input_path']} --method {method} -> {args['output']}")
+
+
+@tool(
+    "preview_sections",
+    "Render a LOCAL visual preview of the section-split proposal — one image "
+    "panel per capture group, each cell coloured by its proposed tissue piece — "
+    "so the RESEARCHER can eyeball how many pieces there really are before that "
+    "count becomes --section-key. Call this in the web/app surface right BEFORE "
+    "you ask the researcher how many pieces they see: it runs the same gap "
+    "detection as split_sections and streams the panels to their screen, turning "
+    "the count question from a guess into something they can confirm by sight. "
+    "The images are written and shown LOCALLY; you never receive them. You get "
+    "back only the aggregate proposed piece count per group — no coordinate, no "
+    "image, no sample ID. Use 'within' (usually 'sample_id') so pieces are found "
+    "per capture. Supports .h5ad with obsm coordinates only. This renders a "
+    "proposal for human review; it changes no file and writes no obs column — run "
+    "split_sections once the researcher confirms the count.",
+    {
+        "input_path": Annotated[str, "Input .h5ad with spatial coordinates in obsm."],
+        "output_dir": Annotated[
+            str, "Local directory for the preview PNGs (e.g. '/karo/output/section_preview')."
+        ],
+        "within": Annotated[
+            str, "Existing obs column to preview within (e.g. 'sample_id'). '' = whole file."
+        ],
+        "method": Annotated[
+            str, "'auto' (gap detection, proposes the count) or 'kmeans' (fixed k)."
+        ],
+        "k": Annotated[int, "Pieces per group; used only when method='kmeans'. Else 0."],
+        "coords_key": Annotated[str, "obsm key for coordinates. Default 'spatial'."],
+    },
+)
+async def preview_sections(args: dict[str, Any]) -> dict[str, Any]:
+    method = (args.get("method") or "auto").strip() or "auto"
+    coords_key = (args.get("coords_key") or "spatial").strip() or "spatial"
+    rr = commands.run_preview_sections(
+        str(args["input_path"]),
+        str(args["output_dir"]),
+        within=(args.get("within") or "").strip(),
+        method=method,
+        k=int(args.get("k") or 0),
+        coords_key=coords_key,
+    )
+    return _report(rr, f"preview_sections.py {args['input_path']} --method {method}")
 
 
 @tool(
@@ -460,7 +506,10 @@ async def run_companion(args: dict[str, Any]) -> dict[str, Any]:
     "'sample_id', '--main-cell-annotation', 'cell_type', '--feature-storage', "
     "'sidecar']). Returns exit code + stdout/stderr so you can read errors and "
     "iterate. A bad --section-key surfaces as a traceback ending in ValueError; "
-    "read it and fix the flag. Does NOT return viewer contents.",
+    "read it and fix the flag. Pseudobulk requires an explicit "
+    "--pseudobulk-replicate-annotation naming a real biological replicate; "
+    "the local guard refuses generated tissue-piece columns. "
+    "Does NOT return viewer contents.",
     {
         "input_path": Annotated[str, "Input .h5ad / .zarr path."],
         "output": Annotated[str, "Output viewer .html path."],
@@ -471,6 +520,9 @@ async def run_companion(args: dict[str, Any]) -> dict[str, Any]:
 )
 async def run_export(args: dict[str, Any]) -> dict[str, Any]:
     flags = [str(f) for f in args.get("flags", [])]
+    check = commands.check_pseudobulk(args["input_path"], flags)
+    if check is not None and not check.ok:
+        return _report(check, "local pseudobulk replicate check")
     argv = [args["input_path"], "-o", args["output"], *flags]
     rr = commands.run_karospace(argv)
     return _report(rr, f"karospace {' '.join(argv)}")
@@ -522,6 +574,7 @@ ALL_TOOLS = [
     rds_convert,
     run_preprocess,
     split_sections,
+    preview_sections,
     generate_notebook,
     merge_sections,
     run_companion,

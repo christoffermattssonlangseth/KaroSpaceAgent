@@ -109,3 +109,53 @@ def test_missing_coordinates_raises_the_mapped_phrase():
     with pytest.raises(SystemExit) as e:
         mod.split(adata, "spatial", "", "auto", 0, None, 10, 30.0, 100, np.random.default_rng(0))
     assert "no spatial coordinates" in str(e.value)   # -> spatial_coordinates_missing
+
+
+@pytest.mark.parametrize("n", [1, 20])
+def test_singleton_and_coincident_cells_propose_one_piece(n):
+    import anndata as ad
+    mod = load_split()
+    data = ad.AnnData(np.ones((n, 2)))
+    data.obsm["spatial"] = np.zeros((n, 2))
+    labels, groups = mod.split(data, "spatial", "", "auto", 0, None, 10, 30., 100, np.random.default_rng(0))
+    assert groups == [{"pieces": 1, "sizes": [n]}]
+    assert len(labels) == n
+
+
+def test_nonfinite_coordinates_fail_before_clustering():
+    mod = load_split()
+    data = synthetic()
+    data.obsm["spatial"][0, 0] = np.nan
+    with pytest.raises(SystemExit, match="split_invalid_coordinates"):
+        mod.split(data, "spatial", "", "auto", 0, None, 10, 30., 100, np.random.default_rng(0))
+
+
+def test_dense_radius_stops_before_allocating_all_neighbours(monkeypatch):
+    mod = load_split()
+    monkeypatch.setattr(mod, "MAX_NEIGHBOR_LINKS", 10)
+    with pytest.raises(SystemExit, match="split_density_too_high"):
+        mod._auto_labels(np.zeros((20, 2)), 1., 10, 100)
+
+
+def test_split_file_preserves_donors_and_records_piece_provenance(tmp_path, monkeypatch):
+    import anndata as ad
+    mod = load_split()
+    source, output = tmp_path / "source.h5ad", tmp_path / "split.h5ad"
+    data = synthetic(within="sample_id")
+    data.write_h5ad(source)
+    monkeypatch.setattr("sys.argv", ["split", str(source), "-o", str(output), "--within", "sample_id"])
+    mod.main()
+    split = ad.read_h5ad(output)
+    assert split.obs["sample_id"].tolist() == data.obs["sample_id"].tolist()
+    assert list(split.uns["karospace_section_split"]["section_keys"]) == ["section"]
+    assert "section" not in ad.read_h5ad(source).obs
+    monkeypatch.setattr("sys.argv", ["split", str(output), "-o", str(tmp_path / "again.h5ad")])
+    with pytest.raises(SystemExit, match="split_existing_column"):
+        mod.main()
+
+
+def test_zarr_fails_with_supported_format_diagnostic(monkeypatch):
+    mod = load_split()
+    monkeypatch.setattr("sys.argv", ["split", "data.zarr", "-o", "out.h5ad"])
+    with pytest.raises(SystemExit, match="split_input_unsupported"):
+        mod.main()

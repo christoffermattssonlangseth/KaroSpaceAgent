@@ -205,6 +205,12 @@ class Boundary:
                 ("section key column", "invalid_section_key"),
                 ("unrecognized arguments", "unsupported_arguments"),
                 ("timed out", "timeout"),
+                ("pseudobulk_replicate_required", "pseudobulk_replicate_required"),
+                ("pseudobulk_piece_replicate", "pseudobulk_piece_replicate"),
+                ("split_input_unsupported", "split_input_unsupported"),
+                ("split_invalid_coordinates", "split_invalid_coordinates"),
+                ("split_existing_column", "split_existing_column"),
+                ("split_density_too_high", "split_density_too_high"),
             ):
                 if needle in text:
                     diagnostic = fixed
@@ -315,20 +321,59 @@ class Boundary:
             if not match:
                 raise ValueError("unknown split result")
             summary = json.loads(match[1])
+            if not isinstance(summary, dict):
+                raise ValueError("invalid split summary")
             for field in ("n_sections", "n_groups"):
-                if isinstance(summary.get(field), int):
-                    data[field] = summary[field]
-            for field in ("method", "key"):
-                if isinstance(summary.get(field), str):
-                    data[field] = summary[field]
+                if type(summary.get(field)) is not int or summary[field] < 1:
+                    raise ValueError("invalid split count")
+                data[field] = summary[field]
+            if summary.get("method") not in ("auto", "kmeans") or not isinstance(summary.get("key"), str) or not summary["key"]:
+                raise ValueError("invalid split schema")
+            data["method"] = summary["method"]
+            data["key"] = self.alias(summary["key"], "col")
+            data["requires_local_review"] = True
+            data["biological_replicates"] = False
             groups = summary.get("groups")
-            if isinstance(groups, list):
-                data["groups"] = [
-                    {"pieces": int(g["pieces"]),
-                     "sizes": [int(s) for s in g.get("sizes", [])]}
-                    for g in groups
-                    if isinstance(g, dict) and isinstance(g.get("pieces"), int)
-                ]
+            if not isinstance(groups, list) or len(groups) != data["n_groups"]:
+                raise ValueError("invalid split groups")
+            data["groups"] = []
+            for group in groups:
+                if not isinstance(group, dict) or type(group.get("pieces")) is not int or group["pieces"] < 1:
+                    raise ValueError("invalid piece count")
+                sizes = group.get("sizes")
+                if not isinstance(sizes, list) or len(sizes) != group["pieces"] or any(type(s) is not int or s < 1 for s in sizes):
+                    raise ValueError("invalid piece sizes")
+                data["groups"].append({"pieces": group["pieces"], "sizes": sizes})
+            if sum(g["pieces"] for g in data["groups"]) != data["n_sections"]:
+                raise ValueError("inconsistent split count")
+        elif name == "preview_sections":
+            # Aggregate proposed-piece counts ONLY. The panels themselves are
+            # rendered and shown locally over the progress channel; no image, no
+            # path, no coordinate, and no group VALUE ever reaches the model.
+            match = re.search(r"(?m)^PREVIEW_SECTIONS_JSON (\{.*\})$", stdout)
+            if not match:
+                raise ValueError("unknown preview result")
+            summary = json.loads(match[1])
+            if not isinstance(summary, dict):
+                raise ValueError("invalid preview summary")
+            for field in ("n_groups", "n_panels"):
+                if type(summary.get(field)) is not int or summary[field] < 1:
+                    raise ValueError("invalid preview count")
+                data[field] = summary[field]
+            if summary.get("method") not in ("auto", "kmeans"):
+                raise ValueError("invalid preview schema")
+            data["method"] = summary["method"]
+            data["requires_local_review"] = True
+            groups = summary.get("groups")
+            if not isinstance(groups, list) or len(groups) != data["n_groups"]:
+                raise ValueError("invalid preview groups")
+            data["groups"] = []
+            for group in groups:
+                if not isinstance(group, dict) or type(group.get("pieces")) is not int or group["pieces"] < 1:
+                    raise ValueError("invalid piece count")
+                data["groups"].append({"pieces": group["pieces"]})
         if remote_args.get("output"):
             data["output"] = remote_args["output"]
+        if remote_args.get("output_dir"):
+            data["output_dir"] = remote_args["output_dir"]
         return result(data)

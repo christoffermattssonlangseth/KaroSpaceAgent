@@ -54,7 +54,7 @@ def test_stdio_tools_sanitize_validate_and_preserve_protocol(tmp_path, caplog):
                 assert "schema" in initialized.instructions
                 listed = await client.list_tools()
                 assert {t.name for t in listed.tools} == set(tools.TOOL_NAMES)
-                assert len(listed.tools) == 16
+                assert len(listed.tools) == 17
                 for tool in listed.tools:
                     assert tool.model_dump(by_alias=True)["inputSchema"]["type"] == "object"
 
@@ -95,7 +95,7 @@ def test_stdio_tools_sanitize_validate_and_preserve_protocol(tmp_path, caplog):
                 unknown = await client.call_tool("not_a_tool", {})
                 assert unknown.model_dump(by_alias=True)["isError"]
                 # The same connection remains usable after error results.
-                assert len((await client.list_tools()).tools) == 16
+                assert len((await client.list_tools()).tools) == 17
 
     with caplog.at_level(logging.ERROR):
         asyncio.run(asyncio.wait_for(exercise(), timeout=30))

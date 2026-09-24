@@ -39,7 +39,7 @@ for line in sys.stdin:
     elif method == 'thread/start':
         assert params['environments'] == []
         assert params['ephemeral'] is True
-        assert len(params['dynamicTools']) == 20
+        assert len(params['dynamicTools']) == 21
         assert params['modelProvider'] == 'openai'
         environments = [{}] if os.environ.get('FAKE_CODEX_ENVIRONMENT') == '1' else []
         emit({'id': ident, 'result': {'thread': {'id': 'thread-1', 'environments': environments}}})
@@ -84,6 +84,9 @@ def test_codex_session_reuses_thread_and_dispatches_only_known_tools(fake_codex)
             assert await session.send(approved(session, "follow up")) == "reply 2"
             checked = json.loads(await session.send(approved(session, "tool")))
             assert checked["success"]
+            record, = session.boundary.history.recent()
+            assert record["model"] == "available-default"
+            assert record["provider"] == "codex" and record["status"] == "completed"
             assert json.loads(checked["contentItems"][0]["text"])["artifacts"][0]["exists"] is False
             rejected = json.loads(await session.send(approved(session, "unknown")))
             assert not rejected["success"]

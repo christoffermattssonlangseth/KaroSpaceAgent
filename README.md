@@ -252,7 +252,7 @@ python -m pip install -e ./app
 ```
 
 The project's `.codex/config.toml` connects the `karospace` stdio MCP server,
-exposing all 20 tools from the standalone app: inspection, GEO acquisition,
+exposing all 21 tools from the standalone app: inspection, dataset readiness, GEO acquisition,
 local raw-Xenium ingestion, R conversion and validation, preparation (QC
 filtering, clustering, section splitting, local split preview, notebook hand-off),
 enrichment, export, packaging, and validation.

@@ -165,13 +165,14 @@ default and no auth: it is a local app with a browser window, not a service.
 | --- | --- |
 | `commands.py` | Subprocess wrappers; locates `karospace` / companion / merge script. No model contact. |
 | `privacy.py` | Model-bound allowlist, local aliases, fixed diagnostics and one-use message review. |
+| `history.py` | Private local tool-run records, command provenance, file metadata and software versions; never exposed through model tools. |
 | `sanitize.py` | Local output formatting and path *stat* (never file bytes). |
 | `tools.py` | The `@tool` local hands (inspect / acquire / .rds convert / prepare / enrich / export / deliver), wrapped by the privacy boundary before any model reply. |
 | `prompt.py` | System prompt — the viewer-building playbook, ported to the tools. |
 | `agent.py` | Provider selection and Claude options/session; one-shot builds. |
 | `codex.py` | Codex app-server connection, conversation state, tool dispatch and interruption. |
 | `tool_worker.py` | Validates and executes one existing tool in a cancellable local worker; the parent filters reports before they reach Codex. |
-| `mcp.py` | Serves the same 20 sanitizing tools over stdio for Codex and other MCP clients; no model session or Claude authentication. |
+| `mcp.py` | Serves the same 21 sanitizing tools over stdio for Codex and other MCP clients; no model session or Claude authentication. |
 | `auth.py` | Detects which credential the CLI subprocess will use and whether it is permitted; no secret is read. |
 | `cli.py` | `karospace-agent build <input> "<intent>"`, `karospace-agent chat [input] ["<intent>"]` (the REPL), `karospace-agent web`, and `karospace-agent auth`. |
 | `web.py` | The browser front end: Starlette app, SSE event hub, one-turn-at-a-time worker (optional `[web]` extra). |
@@ -207,6 +208,81 @@ arguments and does not disable a client's other tools.
 | `KAROSPACE_COMPANION` | Override the companion binary path. |
 | `KAROSPACE_AGENT_TIMEOUT` | Per-subprocess timeout, seconds (default 3600). |
 | `KAROSPACE_AGENT_STREAM` | `0` silences the default console tee of child-process progress (a front end that installs its own sink is unaffected). |
+| `KAROSPACE_AGENT_HISTORY_DIR` | Dedicated local history directory; defaults to `~/.karospace-agent/history`. Use a private, unsynced directory. |
+
+### Local run history
+
+The **History** button in the desktop/browser app shows the latest 100 tool runs
+across sessions and providers. Claude, Codex, and standalone MCP use the same
+recorder. Each run records its timestamps, status, provider/model selection,
+decoded parameters, input/output file metadata, app-environment package versions,
+and actual command lines. Command records include executable metadata, a version
+when available, and hashes of local workflow script source. Package versions are
+explicitly scoped to the app interpreter; a separate scientific interpreter may
+have different installed packages. These records aid reproducibility but do not
+snapshot datasets or the complete software environment.
+
+Records live only on this computer as owner-readable JSON files in
+`~/.karospace-agent/history/<session>/<run>.json` (directories `0700`, files `0600`
+on POSIX). They contain local paths and parameters that may identify people, so
+keep the directory private. Dataset contents, raw logs, chat messages, and
+environment credentials are not recorded. History is never attached to model
+requests or exposed as an MCP tool. The history HTTP endpoint accepts only local
+app requests and disables browser caching; the UI renders record text without HTML.
+
+A start record is written before a tool runs and command details before each
+subprocess starts. Completed, failed, and cancelled calls get a final status.
+After a crash, a `started` record means completion was not recorded; it does not
+prove the output is valid. Recoverable processing steps also record local SHA-256
+fingerprints of their inputs and completed dataset outputs. Computing these
+fingerprints streams file bytes locally and may take time for large datasets;
+neither the bytes nor the fingerprints are sent to a model.
+If history cannot create a start record, the tool returns
+`local_history_unavailable` without running. If saving the final status fails,
+the tool's result is preserved and the local history view reports a warning.
+
+There is no automatic expiry. To remove history, close the app/MCP server and
+delete the relevant session folders in the history directory. This does not
+delete datasets or generated outputs. The UI displays up to 100 records; older
+records remain on disk until removed locally.
+
+### Dataset readiness
+
+`check_readiness` scans `.h5ad` and AnnData/SpatialData `.zarr` in bounded chunks.
+It validates matrix storage and metadata dimensions, finite spatial coordinates,
+the selected section column, and finite/nonnegative/integer-valued counts when
+requested. Multi-table SpatialData requires an explicit table selection. Its
+response contains only fixed diagnostic codes, booleans and aggregate counts;
+no identifiers or values are returned.
+
+The playbook calls this tool before QC, clustering, companion processing and
+export. `ready=false` means resolve the reported errors first. Memory/disk
+estimates are conservative guidance, not guarantees for every algorithm; warnings
+need review. The tool tests output writability and reports available resources.
+It is a workflow check, not an operating-system memory limit. Raw-count validation
+does not establish provenance or prove that integer-valued data was never normalized.
+
+### Recovering after an interruption
+
+Open **History** after restarting the app. **Continue from checkpoint** verifies
+that a completed `.h5ad`/`.zarr` output matches its saved fingerprint and passes a
+local structural/readiness check. **Recover this step** verifies the interrupted
+step's inputs and prepares its saved parameters with a new output location.
+Previous partial outputs are preserved. Approval rechecks file fingerprints in
+case something changed while the preview was open.
+
+Recovery creates an aliased continuation for the normal privacy preview. Nothing
+is sent until you approve it. The model then continues the workflow, asking for
+scientific/display choices that were not recorded; raw chat history is not restored.
+Retries use the currently installed software, not a restored environment.
+
+Supported steps include QC, preprocessing, splitting, conversion, ingestion,
+merging, export retries, and companion `prepare` with an explicit `--output`.
+In-place companion calls, older records without fingerprints, changed/missing
+files, and runs whose original process may still be active require manual review.
+Completed HTML/package outputs are not offered as dataset checkpoints: validating
+HTML alone cannot prove all sidecars are complete. Recovery does not automatically
+rerun operations or guess whether an unfinished output is usable.
 
 ## Tests
 
@@ -232,7 +308,13 @@ worker cancellation, and provider selection in the CLI and web app.
 
 `test_privacy.py` puts synthetic identifiers in paths, labels, logs, unexpected
 fields and exceptions and checks model-bound responses. It also verifies that
-both backends reject unreviewed messages. For the installed Codex runtime,
+both backends reject unreviewed messages. `test_privacy_matrix.py` requires a
+success fixture for every registered tool and tests success, errors, and
+exceptions through the shared Claude/MCP wrapper and Codex RPC response.
+`test_history.py` covers persistence, private-file permissions, cancellation,
+write failures, command provenance, and local-only access. Tests use temporary
+history directories and synthetic identifiers, never the researcher's history.
+For the installed Codex runtime,
 run the opt-in localhost probe after a CLI upgrade:
 
 ```bash

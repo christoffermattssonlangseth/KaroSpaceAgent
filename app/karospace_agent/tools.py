@@ -100,6 +100,31 @@ async def inspect_structure(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @tool(
+    "check_readiness",
+    "Check a local .h5ad or AnnData/SpatialData .zarr before expensive processing. "
+    "Scans expression and coordinates in bounded chunks; checks section labels, "
+    "raw counts when required, output writability, free disk and available memory. "
+    "Returns only aggregate counts and fixed diagnostics. Do not proceed if ready "
+    "is false; resolve errors first. Resource estimates are guidance, not peak-memory "
+    "guarantees. Review warnings. Raw counts are integer-valued nonnegative data; "
+    "this check cannot establish their biological provenance.",
+    {"input_path": Annotated[str, "Input .h5ad/.zarr."],
+     "output_dir": Annotated[str, "Directory planned for outputs."],
+     "section_key": Annotated[str, "Section column alias, or empty if not yet selected."],
+     "coords_key": Annotated[str, "Spatial embedding alias; default spatial."],
+     "counts_layer": Annotated[str, "Raw-count layer alias, or empty to check X."],
+     "require_counts": Annotated[bool, "True before raw-count QC or clustering."],
+     "table": Annotated[str, "SpatialData table alias, or empty for a single table." ]},
+)
+async def check_readiness(args: dict[str, Any]) -> dict[str, Any]:
+    rr = commands.run_readiness(
+        args["input_path"], args["output_dir"], args.get("section_key", ""),
+        args.get("coords_key") or "spatial", args.get("counts_layer", ""),
+        bool(args.get("require_counts", False)), args.get("table", ""))
+    return _report(rr, "local dataset readiness check")
+
+
+@tool(
     "cli_help",
     "Show `karospace --help` (or a verb's help) so you can verify a flag exists "
     "before using it. Never invent flags — check here.",
@@ -672,6 +697,7 @@ async def validate_output(args: dict[str, Any]) -> dict[str, Any]:
 ALL_TOOLS = [
     inspect_input,
     inspect_structure,
+    check_readiness,
     cli_help,
     geo_manifest,
     geo_build,

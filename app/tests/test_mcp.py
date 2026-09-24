@@ -45,6 +45,7 @@ def test_stdio_tools_sanitize_validate_and_preserve_protocol(tmp_path, caplog):
                 "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "KAROSPACE_BIN": str(fake_cli),
                 "KAROSPACE_AGENT_STREAM": "1",  # Server must override teeing.
+                "KAROSPACE_AGENT_HISTORY_DIR": str(tmp_path / "history"),
             },
         )
         async with stdio_client(params) as (read, write):
@@ -54,7 +55,7 @@ def test_stdio_tools_sanitize_validate_and_preserve_protocol(tmp_path, caplog):
                 assert "schema" in initialized.instructions
                 listed = await client.list_tools()
                 assert {t.name for t in listed.tools} == set(tools.TOOL_NAMES)
-                assert len(listed.tools) == 20
+                assert len(listed.tools) == 21
                 for tool in listed.tools:
                     assert tool.model_dump(by_alias=True)["inputSchema"]["type"] == "object"
 
@@ -95,12 +96,17 @@ def test_stdio_tools_sanitize_validate_and_preserve_protocol(tmp_path, caplog):
                 unknown = await client.call_tool("not_a_tool", {})
                 assert unknown.model_dump(by_alias=True)["isError"]
                 # The same connection remains usable after error results.
-                assert len((await client.list_tools()).tools) == 20
+                assert len((await client.list_tools()).tools) == 21
 
     with caplog.at_level(logging.ERROR):
         asyncio.run(asyncio.wait_for(exercise(), timeout=30))
     # The MCP client's stdout decoder logs malformed protocol lines as errors.
     assert not caplog.records, [record.message for record in caplog.records]
+    # Real stdio execution records command provenance only on local disk.
+    from karospace_agent.history import RunHistory
+    records = RunHistory(root=tmp_path / "history").recent()
+    assert any(r["tool"] == "run_export" and r["commands"] for r in records)
+    assert all("PRIVATE_VALUE" not in json.dumps(r) for r in records)
 
 
 def test_stdout_contains_only_jsonrpc(tmp_path):

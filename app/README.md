@@ -116,6 +116,33 @@ aggregation copies only latent vectors and the graph; training still needs enoug
 RAM/GPU memory and the installed CellCharter/scVI dependencies. See the notebook
 for checkpoint recovery instructions.
 
+### Raw spatial ingestion, QC, and R objects
+
+Three tools bring raw inputs to the `.h5ad` the pipeline expects, all computing
+locally and crossing only aggregate counts:
+
+- `ingest_spatial` assembles a local folder of raw spatial bundles into one file
+  with a per-cell `sample_id`, auto-detecting each bundle's vendor layout: Xenium
+  (`cell_feature_matrix.h5` + `cells.parquet` / `cells.csv`) and MERSCOPE / MERFISH
+  (Vizgen's `cell_by_gene.csv` + `cell_metadata.csv`); a folder mixing both is fine.
+  It reuses the GEO builder's per-vendor assembly cores so ingested and GEO-built
+  files are structurally identical. Control / blank probes drop by default;
+  `--include-control` keeps them. Bundle paths (relative to the root) become
+  `sample_id` values and stay local — only sample/cell/gene counts, per-sample
+  sizes, and per-platform bundle counts cross.
+- `qc_filter` drops low-quality cells by total counts and/or detected genes (both
+  thresholds off unless set; ~40 counts / ~15 genes is a common starting point).
+  It validates that `X` holds raw counts and rejects normalized input, forwarding
+  only before/after cell counts.
+- `rds_convert` / `rds_validate` convert a Seurat / SingleCellExperiment `.rds`
+  via rds2h5ad and read the result back; only aliased names and counts cross,
+  never the local path.
+
+Both writers refuse to overwrite an existing output and publish atomically
+(staging dir + hard link), so a partial or concurrent write never replaces a real
+file; failures map to fixed diagnostics with raw logs kept local. Inspect any
+written file with `inspect_input` / `inspect_structure` for its schema.
+
 ### Browser mode
 
 ```bash

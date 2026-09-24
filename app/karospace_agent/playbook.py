@@ -49,7 +49,7 @@ for it.
 Acquire  — geo_manifest      list a GEO accession's samples/files/platform (public metadata).
            geo_build         download only the matrix members of chosen samples -> local .h5ad.
            geo_fetch_file    download ONE supplementary file geo_build skips (e.g. an analyzed *_object.rds) to disk.
-           ingest_xenium     assemble a LOCAL folder of raw Xenium output-* bundles -> one .h5ad (the local twin of geo_build).
+           ingest_spatial    assemble a LOCAL folder of raw Xenium / MERSCOPE bundles -> one .h5ad (the local twin of geo_build).
            rds_inspect       schema of an R .rds/.RData object (Seurat/SCE): assays, layers, embeddings, has_spatial.
            rds_convert       convert an .rds/.RData -> .h5ad (R backend) to keep the authors' annotations/embeddings.
            rds_validate      read a produced .h5ad back through the R backend to confirm assays/embeddings/coords landed.
@@ -136,11 +136,13 @@ raw matrix — convert it first with the rds2h5ad R backend:
 - rds2h5ad needs R + zellkonverter locally; if it's missing the tool says so —
   relay that and fall back to the raw-matrix path rather than failing the job.
 
-## 0d. Ingest a LOCAL folder of raw Xenium bundles
-When the user hands you a directory of raw Xenium output on disk (not a .h5ad, not
-a GEO accession) — one or more 'output-*' bundles, each a folder with
-cell_feature_matrix.h5 + cells.parquet / cells.csv.gz — assemble it with
-ingest_xenium (the local twin of geo_build):
+## 0d. Ingest a LOCAL folder of raw spatial bundles
+When the user hands you a directory of raw spatial output on disk (not a .h5ad, not
+a GEO accession) assemble it with ingest_spatial (the local twin of geo_build). It
+auto-detects two vendor layouts per bundle: Xenium ('output-*' folders with
+cell_feature_matrix.h5 + cells.parquet / cells.csv.gz) and MERSCOPE / MERFISH
+(Vizgen folders with cell_by_gene.csv + cell_metadata.csv); a folder mixing both is
+fine.
 - Point input_path at the parent directory; it discovers every bundle beneath it
   (or pass a single bundle folder). It builds raw counts into X, drops control
   probes (include_control=true to keep them), sets obsm['spatial'] from the
@@ -149,7 +151,8 @@ ingest_xenium (the local twin of geo_build):
   Use exclude=[...] to skip bundles whose
   folder name contains a substring (e.g. a control section).
 - The read + assembly run LOCALLY; you get back only aggregate counts (samples,
-  cells, genes, per-sample sizes) — never a folder name, path, or coordinate.
+  cells, genes, per-sample sizes, per-platform bundle counts) — never a folder
+  name, path, or coordinate.
 - Optional min_counts / min_genes apply the §1c QC inline; leave them 0 (default)
   to keep the raw ingest lossless and run qc_filter as a separate, reviewable step.
 - The result is a fresh raw file exactly like a geo_build one: no clustering yet,
@@ -251,7 +254,7 @@ CellCharter / own the analysis".
 ## 1c. QC-filter a raw matrix — optional, before clustering
 Raw Xenium and other targeted panels carry a tail of near-empty cells
 (segmentation debris, tile-edge fragments) that add noise to clustering and DE.
-When the input contains raw counts in X (a fresh ingest_xenium / geo_build file,
+When the input contains raw counts in X (a fresh ingest_spatial / geo_build file,
 or a file the researcher confirms contains raw counts), you may drop them with
 qc_filter before §1b: set min_counts and/or min_genes (the reference pipelines use ~40 counts /
 ~15 genes for Xenium panels; treat these as a starting point, not a rule) and it
@@ -264,7 +267,7 @@ automatically, and schema alone does not establish raw-count provenance.
 This is OPTIONAL and off unless you set a threshold — skip it for an already-QC'd
 or researcher-supplied file, and never filter silently on sensitive data without
 saying you did. In conversation, if the counts look untrimmed, offer it rather
-than assuming. (ingest_xenium can also apply the same filter inline via its
+than assuming. (ingest_spatial can also apply the same filter inline via its
 min_counts / min_genes, but a separate qc_filter step is easier to review and
 re-run at a different threshold.)"""
 

@@ -32,7 +32,7 @@ GEO_SCRIPT = REPO_ROOT / "scripts" / "geo_fetch.py"
 PREPROCESS_SCRIPT = REPO_ROOT / "scripts" / "preprocess.py"
 SPLIT_SECTIONS_SCRIPT = REPO_ROOT / "scripts" / "split_sections.py"
 PREVIEW_SECTIONS_SCRIPT = REPO_ROOT / "scripts" / "preview_sections.py"
-INGEST_XENIUM_SCRIPT = REPO_ROOT / "scripts" / "ingest_xenium.py"
+INGEST_SPATIAL_SCRIPT = REPO_ROOT / "scripts" / "ingest_spatial.py"
 QC_FILTER_SCRIPT = REPO_ROOT / "scripts" / "qc_filter.py"
 PSEUDOBULK_CHECK_SCRIPT = REPO_ROOT / "scripts" / "check_pseudobulk.py"
 GEN_NOTEBOOK_SCRIPT = REPO_ROOT / "scripts" / "gen_notebook.py"
@@ -729,7 +729,7 @@ def run_rds_validate(input_path: str, timeout: int = 600) -> RunResult:
     return run([binp, "validate", input_path], timeout=timeout, stream=False)
 
 
-def run_ingest_xenium(
+def run_ingest_spatial(
     input_path: str,
     output: str,
     include_control: bool = False,
@@ -738,17 +738,17 @@ def run_ingest_xenium(
     exclude: list[str] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> RunResult:
-    """Run scripts/ingest_xenium.py — assemble local raw Xenium bundles into a .h5ad.
+    """Run scripts/ingest_spatial.py — assemble local raw Xenium / MERSCOPE bundles into a .h5ad.
 
     Uses the karospace scientific interpreter (needs anndata/h5py/scipy). Reads
     the bundles LOCALLY; the model receives only the aggregate summary (sample /
-    cell / gene counts, per-sample sizes), never a sample label, path, or
-    coordinate. Long-running on large multi-sample folders, so it streams
-    progress like an export.
+    cell / gene counts, per-sample sizes, per-platform bundle counts), never a
+    sample label, path, or coordinate. Long-running on large multi-sample folders,
+    so it streams progress like an export.
     """
-    if not INGEST_XENIUM_SCRIPT.exists():
-        return RunResult(127, "", f"ingest_xenium script missing: {INGEST_XENIUM_SCRIPT}")
-    argv = [merge_python(), str(INGEST_XENIUM_SCRIPT), input_path, "-o", output]
+    if not INGEST_SPATIAL_SCRIPT.exists():
+        return RunResult(127, "", f"ingest_spatial script missing: {INGEST_SPATIAL_SCRIPT}")
+    argv = [merge_python(), str(INGEST_SPATIAL_SCRIPT), input_path, "-o", output]
     if include_control:
         argv.append("--include-control")
     if min_counts and min_counts > 0:

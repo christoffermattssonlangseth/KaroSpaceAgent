@@ -420,11 +420,12 @@ class Boundary:
                 if not isinstance(group, dict) or type(group.get("pieces")) is not int or group["pieces"] < 1:
                     raise ValueError("invalid piece count")
                 data["groups"].append({"pieces": group["pieces"]})
-        elif name == "ingest_xenium":
-            # Aggregate counts only: how many bundles/cells/genes, and per-sample
-            # cell counts. The bundle folder names became sample_id VALUES in the
-            # written file and never cross; no path or coordinate crosses either.
-            match = re.search(r"(?m)^INGEST_XENIUM_JSON (\{.*\})$", stdout)
+        elif name == "ingest_spatial":
+            # Aggregate counts only: how many bundles/cells/genes, per-sample cell
+            # counts, and per-platform bundle counts. The bundle folder names became
+            # sample_id VALUES in the written file and never cross; no path or
+            # coordinate crosses either.
+            match = re.search(r"(?m)^INGEST_SPATIAL_JSON (\{.*\})$", stdout)
             if not match:
                 raise ValueError("unknown ingest result")
             summary = json.loads(match[1])
@@ -442,6 +443,15 @@ class Boundary:
             if sum(sizes) != data["n_cells"] and summary.get("qc") is None:
                 raise ValueError("inconsistent ingest count")
             data["sample_sizes"] = sizes
+            platforms = summary.get("platforms")
+            if platforms is not None:
+                # Fixed vendor labels + bundle counts only; must sum to n_samples.
+                if (not isinstance(platforms, dict)
+                        or any(k not in ("xenium", "merscope") for k in platforms)
+                        or any(type(v) is not int or v < 1 for v in platforms.values())
+                        or sum(platforms.values()) != data["n_samples"]):
+                    raise ValueError("invalid ingest platforms")
+                data["platforms"] = {k: platforms[k] for k in sorted(platforms)}
             qc = summary.get("qc")
             if qc is not None:
                 if not isinstance(qc, dict) or any(type(qc.get(k)) is not int for k in ("n_before", "n_after")):

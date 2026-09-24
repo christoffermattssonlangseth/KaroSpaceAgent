@@ -307,28 +307,31 @@ async def rds_validate(args: dict[str, Any]) -> dict[str, Any]:
 # --- Pre-processing -------------------------------------------------------
 
 @tool(
-    "ingest_xenium",
-    "Assemble a folder of RAW, on-disk Xenium output bundles into one "
+    "ingest_spatial",
+    "Assemble a folder of RAW, on-disk spatial output bundles into one "
     "KaroSpace-ready .h5ad — the local twin of geo_build. Point input_path at a "
-    "directory holding one or more Xenium 'output-*' bundles (each a folder with "
-    "cell_feature_matrix.h5 + cells.parquet / cells.csv.gz, the standard Xenium "
-    "Onboard Analysis layout), or at a single bundle. It discovers every bundle, "
-    "builds raw counts into X, drops control probes (keep them with "
-    "include_control), sets x/y_centroid into obsm['spatial'], tags each cell "
-    "with a sample_id from its relative bundle path, and concatenates them. Use this "
-    "when the researcher hands you a local Xenium export rather than an existing "
-    ".h5ad/.zarr or a GEO accession. The read + assembly runs LOCALLY; you "
-    "receive only aggregate counts (samples, cells, genes, per-sample sizes) — "
-    "never a sample label, path, or coordinate. Optional min_counts / min_genes "
-    "apply the same QC as qc_filter inline (off by default; the raw ingest is "
-    "lossless unless you set them). After it finishes, run inspect_input / "
-    "inspect_structure on the output and continue the normal build (it has raw "
-    "counts + coordinates but no clustering yet, so run_preprocess next).",
+    "directory holding one or more raw bundles (or at a single bundle). Two vendor "
+    "layouts are auto-detected per bundle: Xenium (a folder with "
+    "cell_feature_matrix.h5 + cells.parquet / cells.csv.gz, the 10x Onboard "
+    "Analysis layout) and MERSCOPE / MERFISH (a folder with cell_by_gene.csv + "
+    "cell_metadata.csv, the Vizgen layout); a folder mixing both is fine. It "
+    "discovers every bundle, builds raw counts into X, drops control probes (keep "
+    "them with include_control), sets cell centroids into obsm['spatial'], tags "
+    "each cell with a sample_id from its relative bundle path, and concatenates "
+    "them. Use this when the researcher hands you a local Xenium/MERSCOPE export "
+    "rather than an existing .h5ad/.zarr or a GEO accession. The read + assembly "
+    "runs LOCALLY; you receive only aggregate counts (samples, cells, genes, "
+    "per-sample sizes, per-platform bundle counts) — never a sample label, path, "
+    "or coordinate. Optional min_counts / min_genes apply the same QC as qc_filter "
+    "inline (off by default; the raw ingest is lossless unless you set them). After "
+    "it finishes, run inspect_input / inspect_structure on the output and continue "
+    "the normal build (it has raw counts + coordinates but no clustering yet, so "
+    "run_preprocess next).",
     {
         "input_path": Annotated[
-            str, "Directory of Xenium output-* bundles (or one bundle folder)."
+            str, "Directory of raw Xenium / MERSCOPE bundles (or one bundle folder)."
         ],
-        "output": Annotated[str, "Output .h5ad path."],
+        "output": Annotated[str, "New output .h5ad path (never overwritten)."],
         "include_control": Annotated[
             bool, "Keep negative-control / blank probes. Default false (Gene Expression only)."
         ],
@@ -343,9 +346,9 @@ async def rds_validate(args: dict[str, Any]) -> dict[str, Any]:
         ],
     },
 )
-async def ingest_xenium(args: dict[str, Any]) -> dict[str, Any]:
+async def ingest_spatial(args: dict[str, Any]) -> dict[str, Any]:
     exclude = [str(p).strip() for p in args.get("exclude", []) if str(p).strip()]
-    rr = commands.run_ingest_xenium(
+    rr = commands.run_ingest_spatial(
         str(args["input_path"]),
         str(args["output"]),
         include_control=bool(args.get("include_control", False)),
@@ -353,7 +356,7 @@ async def ingest_xenium(args: dict[str, Any]) -> dict[str, Any]:
         min_genes=int(args.get("min_genes") or 0),
         exclude=exclude,
     )
-    return _report(rr, f"ingest_xenium.py {args['input_path']} -> {args['output']}")
+    return _report(rr, f"ingest_spatial.py {args['input_path']} -> {args['output']}")
 
 
 @tool(
@@ -676,7 +679,7 @@ ALL_TOOLS = [
     rds_inspect,
     rds_convert,
     rds_validate,
-    ingest_xenium,
+    ingest_spatial,
     qc_filter,
     run_preprocess,
     split_sections,

@@ -7,12 +7,14 @@ Unrecognized formats fail closed. Alias maps live only in this process.
 from __future__ import annotations
 
 import json
+import asyncio
 from pathlib import Path
 import re
 import uuid
 
 from . import commands
 from .sanitize import stat_path
+from .history import RunHistory, capture_commands
 
 PRIVACY_INSTRUCTIONS = """
 Local privacy boundary: file paths and schema names are opaque aliases. Use
@@ -69,14 +71,16 @@ def _hints(name: str) -> list[str]:
 
 
 class Boundary:
-    def __init__(self, allow_local_paths: bool = False):
+    def __init__(self, allow_local_paths: bool = False, *, provider="mcp", model=None, history=None):
         self.allow_local_paths = allow_local_paths
         self.aliases: dict[str, str] = {}
         self._reverse: dict[tuple[str, str], str] = {}
         self.output_root = commands.REPO_ROOT / "output" / uuid.uuid4().hex
         self._drafts = {}
         self._approved = {}
+        self._recovery_checks = {}
         self.local_reports = []
+        self.history = history if history is not None else RunHistory(provider=provider, model=model)
 
     def preview(self, text: str) -> dict:
         token = uuid.uuid4().hex
@@ -154,8 +158,9 @@ class Boundary:
             if isinstance(value, str):
                 # Aliases can occur inside comma-separated column lists and
                 # companion argv. Boundaries prevent col_1 matching col_10.
-                for alias, original in self.aliases.items():
-                    value = re.sub(r"(?<![\w])" + re.escape(alias) + r"(?![\w])", lambda _: original, value)
+                if self.aliases:
+                    pattern = r"(?<!\w)(?:" + "|".join(re.escape(alias) for alias in sorted(self.aliases, key=len, reverse=True)) + r")(?!\w)"
+                    value = re.sub(pattern, lambda match: self.aliases[match[0]], value)
                 if value.startswith("/karo/output/"):
                     return self._path(value, output=True)
                 return value
@@ -172,6 +177,10 @@ class Boundary:
         return decoded
 
     async def invoke(self, tool, arguments: dict) -> dict:
+        return await self.execute(getattr(tool, "name", "unknown"), arguments, tool.handler)
+
+    async def execute(self, name, arguments, handler):
+        record = None
         try:
             if self.allow_local_paths:
                 arguments = dict(arguments)
@@ -182,13 +191,36 @@ class Boundary:
                     arguments["paths"] = [v if v.startswith("/karo/") else self.register_path(v)
                                           for v in arguments["paths"]]
             local_args = self.decode(arguments)
-            raw = await tool.handler(local_args)
-            return self.filter(tool.name, arguments, local_args, raw)
+            try:
+                record = await asyncio.to_thread(self.history.begin, name, local_args)
+            except (OSError, ValueError, TypeError):
+                self.history.error = "History is unavailable. The tool was not started."
+                return result({"status": "error", "diagnostic": "local_history_unavailable"}, True)
+            with capture_commands(lambda command: self.history.command(record, command)):
+                raw = await handler(local_args)
+            response = self.filter(name, arguments, local_args, raw)
+            finishing = asyncio.create_task(asyncio.to_thread(
+                self.history.finish, record, "error" if response.get("is_error") else "completed", response))
+            try:
+                await asyncio.shield(finishing)
+            except asyncio.CancelledError:
+                # Avoid racing an interrupted status against an output checksum
+                # still being saved by a background thread.
+                await finishing
+                raise
+            return response
+        except asyncio.CancelledError:
+            if record is not None and "finished_at" not in record:
+                self.history.finish(record, "interrupted")
+            raise
         except Exception:
             # Never forward exception strings: validators, path libraries and
             # third-party code frequently include the offending private value.
-            return result({"status": "error", "diagnostic": "local_tool_error",
+            response = result({"status": "error", "diagnostic": "local_tool_error",
                            "message": "Check the local input and registered aliases. Details withheld."}, True)
+            if record is not None:
+                self.history.finish(record, "error", response)
+            return response
 
     def filter(self, name: str, remote_args: dict, local_args: dict, raw: dict) -> dict:
         try:
@@ -281,6 +313,37 @@ class Boundary:
             if not match:
                 raise ValueError("unknown structure format")
             data["spatial_graph_present"] = match[1] == "yes"
+        elif name == "check_readiness":
+            match = re.search(r"(?m)^READINESS_JSON (\{.*\})$", stdout)
+            if not match:
+                raise ValueError("unknown readiness result")
+            summary = json.loads(match[1])
+            allowed = {"table_selection_required", "input_unsupported", "invalid_matrix", "invalid_section",
+                       "input_unreadable", "nonfinite_expression", "counts_shape_mismatch",
+                       "raw_counts_required", "spatial_coordinates_missing", "invalid_coordinates",
+                       "section_key_missing", "section_labels_missing", "section_cardinality_high",
+                       "section_key_not_selected", "disk_estimate_exceeds_free_space", "output_not_writable",
+                       "memory_available_unknown", "memory_estimate_exceeds_available", "metadata_shape_mismatch"}
+            if not isinstance(summary, dict) or type(summary.get("ready")) is not bool:
+                raise ValueError("invalid readiness schema")
+            for key in ("errors", "warnings"):
+                values = summary.get(key)
+                if not isinstance(values, list) or any(type(v) is not str or v not in allowed for v in values):
+                    raise ValueError("invalid readiness diagnostic")
+                data[key] = values
+            if summary["ready"] != (not data["errors"]):
+                raise ValueError("inconsistent readiness status")
+            data["ready"] = summary["ready"]
+            for key in ("cells", "genes", "section_groups", "section_missing", "estimated_memory_bytes",
+                        "estimated_output_bytes", "available_memory_bytes", "free_disk_bytes"):
+                if key in summary:
+                    if type(summary[key]) is not int or summary[key] < 0:
+                        raise ValueError("invalid readiness count")
+                    data[key] = summary[key]
+            if "raw_counts" in summary:
+                if type(summary["raw_counts"]) is not bool:
+                    raise ValueError("invalid readiness counts status")
+                data["raw_counts"] = summary["raw_counts"]
         elif name == "validate_output":
             data["artifacts"] = []
             for token, path in zip(remote_args["paths"], local_args["paths"]):

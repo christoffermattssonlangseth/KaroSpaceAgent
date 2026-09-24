@@ -112,7 +112,7 @@ class Session:
         self._interrupted = False
         self._lock = asyncio.Lock()
         self._tool_lock = asyncio.Lock()
-        self.boundary = Boundary()
+        self.boundary = Boundary(provider="codex", model=model)
 
     async def __aenter__(self):
         # Connect lazily: the native window must open even if sign-in is missing.
@@ -205,6 +205,7 @@ class Session:
                 if default is None:
                     raise RuntimeError("Codex returned no default model. Choose one with --model.")
                 params["model"] = default["model"]
+            self.boundary.history.model = params["model"]
             response = await self._request("thread/start", params)
             if response["thread"].get("environments") != []:
                 raise RuntimeError(
@@ -278,9 +279,8 @@ class Session:
             self._on_event("tool", f"{name}({_brief(params.get('arguments'))})")
             async with self._tool_lock:
                 remote_args = params["arguments"]
-                local_args = self.boundary.decode(remote_args)
-                raw = await self._run_tool(name, local_args)
-                result = self.boundary.filter(name, remote_args, local_args, raw)
+                result = await self.boundary.execute(
+                    name, remote_args, lambda local_args: self._run_tool(name, local_args))
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -310,6 +310,9 @@ class Session:
                 event = json.loads(line)
                 if event["kind"] == "progress" and self._on_progress:
                     self._on_progress(event["stream"], event["line"])
+                elif event["kind"] == "command":
+                    from .history import accept_command
+                    accept_command(event["command"])
                 elif event["kind"] == "result":
                     result = event["result"]
             await proc.wait()

@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 
 from . import commands, tools
 from .privacy import PRIVACY_INSTRUCTIONS
+from .history import capture_commands
 
 
 def tool_specs() -> list[dict]:
@@ -53,7 +54,8 @@ def main() -> None:
         tool = next(t for t in tools.ALL_TOOLS if t.name == name)
         spec = next(s for s in tool_specs() if s["name"] == name)
         jsonschema.validate(arguments, spec["inputSchema"])
-        result = asyncio.run(tool.handler(arguments))
+        with capture_commands(lambda command: emit({"kind": "command", "command": command})):
+            result = asyncio.run(tool.handler(arguments))
     except Exception as exc:
         result = {"is_error": True, "content": [{"type": "text", "text": str(exc)}]}
     emit({"kind": "result", "result": result})

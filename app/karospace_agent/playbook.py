@@ -55,6 +55,7 @@ Acquire  — geo_manifest      list a GEO accession's samples/files/platform (pu
            rds_validate      read a produced .h5ad back through the R backend to confirm assays/embeddings/coords landed.
 Inspect  — inspect_input     sanitized obs/feature metadata for a file. ALWAYS call first.
            inspect_structure X dtype + is-integer, layers, obsm, obsp (graph present?).
+           check_readiness   local counts/coordinates/section validation and memory/disk estimates before heavy work.
            cli_help          verify a flag exists before using it. Never invent flags.
 Prepare  — qc_filter        drop low-quality cells (min_counts / min_genes) from a raw matrix before enrich/export.
            run_preprocess    add a leiden clustering when a raw file has no annotations (writes obs['leiden']).
@@ -224,6 +225,16 @@ dtype + all_integer, layer names+dtypes, obsm keys+cols, obsp keys, and a
 spatial_graph_present flag). Two decisions depend on it: whether a spatial
 neighbor graph already exists (§5) and how X is normalized (§3). Still no cell
 values cross — reason from structure alone.
+
+Before QC, clustering, companion processing or export, call check_readiness with
+the planned output directory and selected section/coordinate keys. Set
+require_counts=true for raw-count QC or clustering (QC reads X, so leave
+counts_layer empty for that operation). For export, select the appropriate
+counts layer only if raw-count analytics need it. Resolve ready=false errors
+before starting heavy processing and discuss resource warnings. Estimates are
+not guarantees: dense algorithms may require much more memory. Run the check
+again after changing the input or relevant settings. For unsupported inputs,
+convert/ingest them first; never infer readiness from filenames.
 
 ## 1b. Prepare an un-annotated matrix — cluster it first
 If inspect_input shows NO analysis-derived annotation at all — no cell_type /

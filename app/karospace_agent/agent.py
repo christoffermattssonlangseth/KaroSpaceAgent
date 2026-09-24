@@ -147,7 +147,7 @@ class Session:
         on_progress: ProgressSink | None = None,
     ) -> None:
         import tempfile
-        self.boundary = Boundary()
+        self.boundary = Boundary(provider="claude", model=model)
         self._workspace = tempfile.TemporaryDirectory(prefix="karospace-claude-")
         self._client = ClaudeSDKClient(options=build_options(
             model, chat=True, boundary=self.boundary, cwd=self._workspace.name))

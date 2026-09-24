@@ -11,6 +11,7 @@ no auth, so treat it as a local app with a browser window, not a service.
     POST /preview     {"text": ...} -> local draft with aliased paths/names
     POST /send        {"draft_id": ...} -> approve and queue that exact draft
     POST /interrupt   stop the running turn
+    GET  /history     private local tool-run history (never a model tool)
 
 The data boundary is the Session's: built-ins off, allowlisted tool responses.
 What the browser shows — model text, tool-call lines, child-process progress —
@@ -49,6 +50,13 @@ MAX_PROGRESS_EVENTS = 5_000  # keep the replay bounded on very chatty exports
 # local path + aggregate meta only — no coordinate, no group value.
 PREVIEW_IMG_MARKER = "KAROSPACE_PREVIEW_IMG "
 MAX_PREVIEW_BYTES = 8 * 1024 * 1024  # skip an implausibly large "panel"
+
+
+def _local_request(request):
+    return (request.client is not None and request.client.host in {"127.0.0.1", "::1"}
+            and request.url.hostname in {"127.0.0.1", "::1", "localhost"}
+            and request.headers.get("x-karospace-local") == "1"
+            and request.headers.get("sec-fetch-site") != "cross-site")
 
 
 class Hub:
@@ -113,6 +121,7 @@ class Conversation:
         self._worker: asyncio.Task | None = None
         self._session = None
         self.state = "idle"
+        self.recovering = False
 
     async def start(self) -> None:
         self.hub.loop = asyncio.get_running_loop()
@@ -261,6 +270,8 @@ def create_app(
         )
 
     async def send(request: Request):
+        if convo.recovering:
+            return JSONResponse({"error": "Wait for checkpoint verification to finish."}, status_code=409)
         try:
             body = await request.json()
         except Exception:  # noqa: BLE001
@@ -268,6 +279,17 @@ def create_app(
         draft_id = body.get("draft_id") if isinstance(body, dict) else None
         if not isinstance(draft_id, str):
             return JSONResponse({"error": "A reviewed privacy preview is required."}, status_code=400)
+        if draft_id in convo._session.boundary._recovery_checks:
+            from . import recovery
+            if convo.state != "idle" or not convo._queue.empty():
+                return JSONResponse({"error": "Wait for the current work to finish before recovering."}, status_code=409)
+            convo.recovering = True
+            try:
+                await asyncio.to_thread(recovery.revalidate, convo._session.boundary, draft_id)
+            except recovery.RecoveryError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=409)
+            finally:
+                convo.recovering = False
         try:
             message = convo._session.boundary.approve(draft_id)
         except ValueError as exc:
@@ -292,6 +314,44 @@ def create_app(
         await convo.interrupt()
         return JSONResponse({"state": convo.state}, status_code=202)
 
+    async def history(request: Request):
+        # The custom header prevents cross-origin simple requests/navigation;
+        # no CORS permission is granted. Also reject remote clients and Host
+        # names used by DNS rebinding against a loopback app.
+        if not _local_request(request):
+            return JSONResponse({"error": "History is available only in the local app."}, status_code=403)
+        store = convo._session.boundary.history
+        try:
+            records = await asyncio.to_thread(store.recent)
+        except OSError:
+            return JSONResponse({"error": "Local history could not be read."}, status_code=503,
+                                headers={"Cache-Control": "no-store"})
+        return JSONResponse({"records": records, "directory": str(store.root), "warning": store.error},
+                            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+    async def recovery_preview(request: Request):
+        if not _local_request(request):
+            return JSONResponse({"error": "Recovery is available only in the local app."}, status_code=403)
+        if convo.state != "idle" or not convo._queue.empty() or convo.recovering:
+            return JSONResponse({"error": "Wait for the current work to finish before recovering."}, status_code=409)
+        from . import recovery
+        convo.recovering = True
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or any(type(body.get(k)) is not str for k in ("session_id", "run_id")):
+                raise ValueError("invalid_record_id")
+            boundary = convo._session.boundary
+            record = await asyncio.to_thread(boundary.history.get, body["session_id"], body["run_id"])
+            draft = await asyncio.to_thread(recovery.prepare, boundary, record)
+            return JSONResponse(draft, headers={"Cache-Control": "no-store"})
+        except recovery.RecoveryError as exc:
+            # RecoveryError strings are fixed application diagnostics.
+            return JSONResponse({"error": str(exc)}, status_code=409, headers={"Cache-Control": "no-store"})
+        except (OSError, ValueError, TypeError, KeyError):
+            return JSONResponse({"error": "Saved recovery record could not be verified."}, status_code=400)
+        finally:
+            convo.recovering = False
+
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette):
         await convo.start()
@@ -309,6 +369,8 @@ def create_app(
             Route("/preview", preview, methods=["POST"]),
             Route("/opening", opening),
             Route("/interrupt", interrupt, methods=["POST"]),
+            Route("/history", history),
+            Route("/recovery/preview", recovery_preview, methods=["POST"]),
         ],
         lifespan=lifespan,
     )

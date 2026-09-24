@@ -306,6 +306,17 @@
     header .note { display: none; }
     .brand .kind { display: none; }
   }
+  #history-dialog {
+    width: min(860px, 90vw); max-height: 80vh; overflow: auto;
+    color: var(--text-color); background: var(--header-bg);
+    border: 1px solid var(--border-color); border-radius: 12px; padding: 22px;
+  }
+  #history-dialog::backdrop { background: rgba(0,0,0,0.45); }
+  #history-dialog .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #history-dialog details { border-top: 1px solid var(--border-color); padding: 12px 0; }
+  #history-dialog summary { cursor: pointer; }
+  #history-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+  #history-location { overflow-wrap: anywhere; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -342,7 +353,19 @@
   <span class="spacer"></span>
   <span class="note">Paths and schema names use local aliases; raw tool logs stay here. Review the outgoing text before each send. Free-text names and identifiers cannot be detected reliably—remove them from the preview.</span>
   <button type="button" id="theme" class="icon-btn" title="Toggle theme (T)" aria-label="Toggle theme">🌙</button>
+  <button type="button" id="history-open">History</button>
 </header>
+<dialog id="history-dialog" aria-labelledby="history-title">
+  <div class="actions">
+    <button type="button" id="history-refresh">Refresh</button>
+    <button type="button" id="history-close">Close</button>
+  </div>
+  <h2 id="history-title">Local run history</h2>
+  <p>Tool runs from this computer, newest first (up to 100). Paths and parameters stay here and are never sent to the model from this view.</p>
+  <p id="history-location"></p>
+  <p id="history-notice" role="status"></p>
+  <div id="history-records"></div>
+</dialog>
 <main>
   <div id="pipeline" aria-label="Build pipeline">
     <div class="stage" data-stage="inspect"><span class="node"><span class="num">1</span></span><span class="name">Inspect</span></div>
@@ -654,6 +677,7 @@
       try { msg = (await r.json()).error || msg; } catch (_) {}
       addMessage("error", `${path}: ${msg}`);
     }
+    return r.ok;
   }
 
   $("composer").addEventListener("submit", async (ev) => {
@@ -672,6 +696,61 @@
     await post("/send", { draft_id: draft.draft_id });
   });
   stopBtn.addEventListener("click", () => post("/interrupt"));
+  async function loadHistory() {
+    $("history-notice").textContent = "Loading local history…";
+    $("history-records").replaceChildren();
+    try {
+      const response = await fetch("/history", {
+        headers: { "X-KaroSpace-Local": "1" }, cache: "no-store",
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not read local history.");
+      $("history-location").textContent = "Stored on this computer: " + data.directory;
+      $("history-notice").textContent = data.warning || (data.records.length ? "" : "No tool runs recorded yet.");
+      for (const record of data.records) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        const state = record.status === "started" ? "Completion not recorded (running or interrupted)" : record.status;
+        summary.textContent = `${record.started_at} · ${record.tool} · ${state}`;
+        const body = document.createElement("pre");
+        // Local parameters can contain arbitrary text. Never interpret as HTML
+        // or copy these records into the composer, transcript, or model prompt.
+        body.textContent = JSON.stringify(record, null, 2);
+        details.append(summary, body);
+        const resume = document.createElement("button");
+        resume.type = "button";
+        resume.hidden = record.status === "completed"
+          ? !(record.output_fingerprints || []).some(file => file.sha256)
+          : !(record.input_fingerprints || []).length || !(record.input_fingerprints || []).every(file => file.sha256);
+        resume.textContent = record.status === "completed" ? "Continue from checkpoint" : "Recover this step";
+        resume.addEventListener("click", async () => {
+          resume.disabled = true;
+          $("history-notice").textContent = "Verifying local files. Large datasets may take a while…";
+          try {
+            const response = await fetch("/recovery/preview", {
+              method: "POST", headers: { "Content-Type": "application/json", "X-KaroSpace-Local": "1" },
+              body: JSON.stringify({ session_id: record.session_id, run_id: record.id }),
+            });
+            const draft = await response.json();
+            if (!response.ok) throw new Error(draft.error || "Could not verify this checkpoint.");
+            $("history-notice").textContent = "Verification complete. Review the continuation before sending.";
+            if (window.confirm("This exact continuation will be sent to the model. It contains aliases, not local identifiers. Review before continuing.\n\n" + draft.text)) {
+              if (await post("/send", { draft_id: draft.draft_id })) $("history-dialog").close();
+            }
+          } catch (error) {
+            $("history-notice").textContent = error.message;
+          } finally { resume.disabled = false; }
+        });
+        details.append(resume);
+        $("history-records").append(details);
+      }
+    } catch (error) {
+      $("history-notice").textContent = error.message;
+    }
+  }
+  $("history-open").addEventListener("click", () => { $("history-dialog").showModal(); loadHistory(); });
+  $("history-close").addEventListener("click", () => $("history-dialog").close());
+  $("history-refresh").addEventListener("click", loadHistory);
   input.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); sendBtn.click(); }
   });

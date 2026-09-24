@@ -28,6 +28,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MERGE_SCRIPT = REPO_ROOT / "scripts" / "merge_sections.py"
 STRUCTURE_SCRIPT = REPO_ROOT / "scripts" / "inspect_structure.py"
+READINESS_SCRIPT = REPO_ROOT / "scripts" / "check_readiness.py"
 GEO_SCRIPT = REPO_ROOT / "scripts" / "geo_fetch.py"
 PREPROCESS_SCRIPT = REPO_ROOT / "scripts" / "preprocess.py"
 SPLIT_SECTIONS_SCRIPT = REPO_ROOT / "scripts" / "split_sections.py"
@@ -217,6 +218,8 @@ def run(
     strips; showing them on the console/scrollback would surface locally what the
     tool then removes before the model sees it.
     """
+    from .history import record_command
+    record_command(argv, timeout, REPO_ROOT)
     sink = null_sink if not stream else (on_line or get_progress_sink())
     use_pty = (
         stream
@@ -429,6 +432,16 @@ def run_structure(input_path: str, table: str = "", timeout: int = 600) -> RunRe
     if table:
         argv += ["--table", table]
     return run(argv, timeout=timeout, stream=False)
+
+
+def run_readiness(input_path, output_dir, section_key="", coords_key="spatial",
+                  counts_layer="", require_counts=False, table=""):
+    argv = [merge_python(), str(READINESS_SCRIPT), input_path, "--output-dir", output_dir,
+            "--section-key", section_key, "--coords-key", coords_key,
+            "--counts-layer", counts_layer, "--table", table]
+    if require_counts:
+        argv.append("--require-counts")
+    return run(argv, timeout=600, stream=False)
 
 
 def run_geo_manifest(accession: str, sizes: bool = True, timeout: int = 300) -> RunResult:

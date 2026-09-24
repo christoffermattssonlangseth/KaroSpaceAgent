@@ -144,7 +144,7 @@ default and no auth: it is a local app with a browser window, not a service.
 | `agent.py` | Provider selection and Claude options/session; one-shot builds. |
 | `codex.py` | Codex app-server connection, conversation state, tool dispatch and interruption. |
 | `tool_worker.py` | Validates and executes one existing tool in a cancellable local worker; the parent filters reports before they reach Codex. |
-| `mcp.py` | Serves the same 17 sanitizing tools over stdio for Codex and other MCP clients; no model session or Claude authentication. |
+| `mcp.py` | Serves the same 20 sanitizing tools over stdio for Codex and other MCP clients; no model session or Claude authentication. |
 | `auth.py` | Detects which credential the CLI subprocess will use and whether it is permitted; no secret is read. |
 | `cli.py` | `karospace-agent build <input> "<intent>"`, `karospace-agent chat [input] ["<intent>"]` (the REPL), `karospace-agent web`, and `karospace-agent auth`. |
 | `web.py` | The browser front end: Starlette app, SSE event hub, one-turn-at-a-time worker (optional `[web]` extra). |

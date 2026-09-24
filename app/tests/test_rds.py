@@ -75,6 +75,21 @@ def test_run_rds_convert_omits_unset_options(monkeypatch):
     assert argv == ["RDS", "convert", "obj.rds", "out.h5ad"]
 
 
+def test_run_rds_validate_argv(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(commands, "run", lambda argv, **kw: (captured.update(argv=argv, kwargs=kw), commands.RunResult(0, "{}", ""))[1])
+    monkeypatch.setattr(commands, "rds2h5ad_bin", lambda: "RDS")
+    commands.run_rds_validate("out.h5ad")
+    assert captured["argv"] == ["RDS", "validate", "out.h5ad"]
+    assert captured["kwargs"].get("stream") is False
+
+
+def test_run_rds_validate_missing_binary(monkeypatch):
+    monkeypatch.setattr(commands, "rds2h5ad_bin", lambda: None)
+    rr = commands.run_rds_validate("out.h5ad")
+    assert rr.returncode == 127 and "rds2h5ad not found" in rr.stderr
+
+
 def test_missing_binary_reports_how_to_install(monkeypatch):
     monkeypatch.setattr(commands, "rds2h5ad_bin", lambda: None)
     rr = commands.run_rds_convert("obj.rds", "out.h5ad")
@@ -85,10 +100,55 @@ def test_missing_binary_reports_how_to_install(monkeypatch):
 # --- Registration ----------------------------------------------------------
 
 def test_rds_tools_are_registered_and_allowed():
-    assert "rds_inspect" in tools.TOOL_NAMES
-    assert "rds_convert" in tools.TOOL_NAMES
-    assert "mcp__karospace__rds_inspect" in agent.ALLOWED_TOOL_NAMES
-    assert "mcp__karospace__rds_convert" in agent.ALLOWED_TOOL_NAMES
+    for name in ("rds_inspect", "rds_convert", "rds_validate"):
+        assert name in tools.TOOL_NAMES
+        assert f"mcp__karospace__{name}" in agent.ALLOWED_TOOL_NAMES
+
+
+# --- validate privacy branch (synthetic JSON, no R needed) -----------------
+
+def test_validate_forwards_names_and_counts_not_the_local_path():
+    from karospace_agent.privacy import Boundary
+
+    boundary = Boundary(allow_local_paths=True)
+    # jsonlite auto_unbox collapses length-1 vectors to scalars: obs_columns and
+    # assays here are single strings, reduced_dims a list, var_columns absent.
+    stdout = json.dumps({
+        "input": "/private/patients/tiny.h5ad",
+        "cells": 8, "genes": 20,
+        "assays": "counts",
+        "assay_dims": {"name": "counts", "dims": [20, 8]},
+        "reduced_dims": ["harmonyX", "spatial"],
+        "obs_columns": "cell_type",
+        "spatial_dims": [8, 2],
+    })
+    raw = {"_local": {"returncode": 0, "stdout": stdout, "stderr": "", "timed_out": False}}
+    res = boundary.filter("rds_validate", {}, {}, raw)
+    text = res["content"][0]["text"]
+    data = json.loads(text)
+
+    assert res["is_error"] is False
+    assert data["cells"] == 8 and data["genes"] == 20
+    assert data["has_spatial"] is True and data["spatial_dims"] == [8, 2]
+    # Scalars were coerced to single-element lists and every name aliased.
+    assert len(data["assays"]) == 1 and data["assays"][0]["dims"] == [20, 8]
+    assert len(data["obs_columns"]) == 1
+    assert len(data["reduced_dims"]) == 2
+    # The real names and the local input path never cross. (Role hints like
+    # "spatial" are fixed vocabulary and may appear by design; the embedding's
+    # actual name "harmonyX" must not.)
+    for leak in ("counts", "cell_type", "harmonyX", "/private/patients", "tiny.h5ad"):
+        assert leak not in text
+
+
+def test_validate_fails_closed_on_a_non_dict_summary():
+    from karospace_agent.privacy import Boundary
+
+    boundary = Boundary(allow_local_paths=True)
+    raw = {"_local": {"returncode": 0, "stdout": "[1, 2, 3]", "stderr": "", "timed_out": False}}
+    res = boundary.filter("rds_validate", {}, {}, raw)
+    assert res["is_error"] is True
+    assert json.loads(res["content"][0]["text"])["diagnostic"] == "schema_unavailable"
 
 
 # --- End-to-end (only when the R backend is really available) --------------

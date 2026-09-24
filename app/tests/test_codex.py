@@ -39,7 +39,7 @@ for line in sys.stdin:
     elif method == 'thread/start':
         assert params['environments'] == []
         assert params['ephemeral'] is True
-        assert len(params['dynamicTools']) == 17
+        assert len(params['dynamicTools']) == 20
         assert params['modelProvider'] == 'openai'
         environments = [{}] if os.environ.get('FAKE_CODEX_ENVIRONMENT') == '1' else []
         emit({'id': ident, 'result': {'thread': {'id': 'thread-1', 'environments': environments}}})

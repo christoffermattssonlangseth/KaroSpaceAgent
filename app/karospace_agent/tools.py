@@ -287,7 +287,110 @@ async def rds_convert(args: dict[str, Any]) -> dict[str, Any]:
     return _report(rr, f"rds2h5ad convert {args['input_path']} -> {args['output']}")
 
 
+@tool(
+    "rds_validate",
+    "Read a produced .h5ad back through the rds2h5ad R backend (zellkonverter) "
+    "and return a compact STRUCTURAL summary: cell and gene counts, the assay "
+    "names with their dims, reduced-dim (embedding) names, obs and var column "
+    "names, and — if present — the spatial coordinate dims. Schema and counts "
+    "only; NO data values, so it needs no example stripping. Use it right after "
+    "rds_convert as an independent check that the conversion carried the assays, "
+    "embeddings and coordinates you expected (a natural companion to converting "
+    "an analyzed .rds). Requires rds2h5ad on PATH (R + zellkonverter).",
+    {"input_path": Annotated[str, "Path to the .h5ad file to read back."]},
+)
+async def rds_validate(args: dict[str, Any]) -> dict[str, Any]:
+    rr = commands.run_rds_validate(str(args["input_path"]))
+    return _report(rr, f"rds2h5ad validate {args['input_path']}")
+
+
 # --- Pre-processing -------------------------------------------------------
+
+@tool(
+    "ingest_xenium",
+    "Assemble a folder of RAW, on-disk Xenium output bundles into one "
+    "KaroSpace-ready .h5ad — the local twin of geo_build. Point input_path at a "
+    "directory holding one or more Xenium 'output-*' bundles (each a folder with "
+    "cell_feature_matrix.h5 + cells.parquet / cells.csv.gz, the standard Xenium "
+    "Onboard Analysis layout), or at a single bundle. It discovers every bundle, "
+    "builds raw counts into X, drops control probes (keep them with "
+    "include_control), sets x/y_centroid into obsm['spatial'], tags each cell "
+    "with a sample_id from its relative bundle path, and concatenates them. Use this "
+    "when the researcher hands you a local Xenium export rather than an existing "
+    ".h5ad/.zarr or a GEO accession. The read + assembly runs LOCALLY; you "
+    "receive only aggregate counts (samples, cells, genes, per-sample sizes) — "
+    "never a sample label, path, or coordinate. Optional min_counts / min_genes "
+    "apply the same QC as qc_filter inline (off by default; the raw ingest is "
+    "lossless unless you set them). After it finishes, run inspect_input / "
+    "inspect_structure on the output and continue the normal build (it has raw "
+    "counts + coordinates but no clustering yet, so run_preprocess next).",
+    {
+        "input_path": Annotated[
+            str, "Directory of Xenium output-* bundles (or one bundle folder)."
+        ],
+        "output": Annotated[str, "Output .h5ad path."],
+        "include_control": Annotated[
+            bool, "Keep negative-control / blank probes. Default false (Gene Expression only)."
+        ],
+        "min_counts": Annotated[
+            int, "Optional QC: drop cells below this many total counts. 0 = off (default)."
+        ],
+        "min_genes": Annotated[
+            int, "Optional QC: drop cells expressing fewer genes than this. 0 = off (default)."
+        ],
+        "exclude": Annotated[
+            list, "Skip a bundle whose folder name contains one of these substrings. Empty = keep all."
+        ],
+    },
+)
+async def ingest_xenium(args: dict[str, Any]) -> dict[str, Any]:
+    exclude = [str(p).strip() for p in args.get("exclude", []) if str(p).strip()]
+    rr = commands.run_ingest_xenium(
+        str(args["input_path"]),
+        str(args["output"]),
+        include_control=bool(args.get("include_control", False)),
+        min_counts=int(args.get("min_counts") or 0),
+        min_genes=int(args.get("min_genes") or 0),
+        exclude=exclude,
+    )
+    return _report(rr, f"ingest_xenium.py {args['input_path']} -> {args['output']}")
+
+
+@tool(
+    "qc_filter",
+    "Drop low-quality cells from a spatial .h5ad on counts and/or detected "
+    "genes — the standard raw-Xenium QC step (filter_cells min_counts=40, "
+    "min_genes=15 in the reference pipelines). Raw panels carry a tail of "
+    "near-empty cells (segmentation debris, tile-edge fragments) that add noise "
+    "to clustering and DE; this removes them before the companion / export. Set "
+    "at least one of min_counts / min_genes to a positive threshold. The read + "
+    "filter runs LOCALLY; you receive only the aggregate before/after cell "
+    "counts — never a per-cell total, coordinate, or identifier. Thresholds are "
+    "a scientific choice: start from the panel-typical defaults and re-run if the "
+    "researcher wants them stricter/looser. After it finishes, inspect_input the "
+    "output and continue. Requires finite, nonnegative, integer-valued raw counts "
+    "in X; invalid counts are rejected (qc_counts_required). Always choose "
+    "a new output path: existing files and the input cannot be overwritten.",
+    {
+        "input_path": Annotated[str, "Input .h5ad with raw counts in X."],
+        "output": Annotated[str, "New output .h5ad path (filtered); must not already exist."],
+        "min_counts": Annotated[
+            int, "Drop cells with fewer than this many total counts. 0 = off."
+        ],
+        "min_genes": Annotated[
+            int, "Drop cells expressing fewer than this many genes. 0 = off."
+        ],
+    },
+)
+async def qc_filter(args: dict[str, Any]) -> dict[str, Any]:
+    rr = commands.run_qc_filter(
+        str(args["input_path"]),
+        str(args["output"]),
+        min_counts=int(args.get("min_counts") or 0),
+        min_genes=int(args.get("min_genes") or 0),
+    )
+    return _report(rr, f"qc_filter.py {args['input_path']} -> {args['output']}")
+
 
 @tool(
     "run_preprocess",
@@ -572,6 +675,9 @@ ALL_TOOLS = [
     geo_fetch_file,
     rds_inspect,
     rds_convert,
+    rds_validate,
+    ingest_xenium,
+    qc_filter,
     run_preprocess,
     split_sections,
     preview_sections,

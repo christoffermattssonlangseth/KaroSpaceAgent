@@ -32,6 +32,8 @@ GEO_SCRIPT = REPO_ROOT / "scripts" / "geo_fetch.py"
 PREPROCESS_SCRIPT = REPO_ROOT / "scripts" / "preprocess.py"
 SPLIT_SECTIONS_SCRIPT = REPO_ROOT / "scripts" / "split_sections.py"
 PREVIEW_SECTIONS_SCRIPT = REPO_ROOT / "scripts" / "preview_sections.py"
+INGEST_XENIUM_SCRIPT = REPO_ROOT / "scripts" / "ingest_xenium.py"
+QC_FILTER_SCRIPT = REPO_ROOT / "scripts" / "qc_filter.py"
 PSEUDOBULK_CHECK_SCRIPT = REPO_ROOT / "scripts" / "check_pseudobulk.py"
 GEN_NOTEBOOK_SCRIPT = REPO_ROOT / "scripts" / "gen_notebook.py"
 
@@ -704,6 +706,80 @@ def run_rds_convert(
         argv += ["--reduced-dims", ",".join(reduced_dims)]
     if no_spatial:
         argv.append("--no-spatial")
+    return run(argv, timeout=timeout)
+
+
+def run_rds_validate(input_path: str, timeout: int = 600) -> RunResult:
+    """Run `rds2h5ad validate` — schema-only read-back of a produced .h5ad.
+
+    Reads the written file back through zellkonverter and emits a compact
+    structural JSON (cell/gene counts, assay + reduced-dim + obs/var column
+    NAMES, and spatial dims if present) — NO data values, so like rds_inspect it
+    needs no example stripping. A natural after-conversion check that the .h5ad
+    carries the assays/embeddings/coordinates you expected. `stream=False` for
+    console parity with the other inspection probes.
+    """
+    binp = rds2h5ad_bin()
+    if binp is None:
+        return RunResult(
+            127, "",
+            "rds2h5ad not found on PATH. Install it (pip install rdstoh5ad; needs "
+            "Rscript + zellkonverter) or set RDS2H5AD_BIN.",
+        )
+    return run([binp, "validate", input_path], timeout=timeout, stream=False)
+
+
+def run_ingest_xenium(
+    input_path: str,
+    output: str,
+    include_control: bool = False,
+    min_counts: int = 0,
+    min_genes: int = 0,
+    exclude: list[str] | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run scripts/ingest_xenium.py — assemble local raw Xenium bundles into a .h5ad.
+
+    Uses the karospace scientific interpreter (needs anndata/h5py/scipy). Reads
+    the bundles LOCALLY; the model receives only the aggregate summary (sample /
+    cell / gene counts, per-sample sizes), never a sample label, path, or
+    coordinate. Long-running on large multi-sample folders, so it streams
+    progress like an export.
+    """
+    if not INGEST_XENIUM_SCRIPT.exists():
+        return RunResult(127, "", f"ingest_xenium script missing: {INGEST_XENIUM_SCRIPT}")
+    argv = [merge_python(), str(INGEST_XENIUM_SCRIPT), input_path, "-o", output]
+    if include_control:
+        argv.append("--include-control")
+    if min_counts and min_counts > 0:
+        argv += ["--min-counts", str(min_counts)]
+    if min_genes and min_genes > 0:
+        argv += ["--min-genes", str(min_genes)]
+    for pat in exclude or []:
+        argv += ["--exclude", pat]
+    return run(argv, timeout=timeout)
+
+
+def run_qc_filter(
+    input_path: str,
+    output: str,
+    min_counts: int = 0,
+    min_genes: int = 0,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> RunResult:
+    """Run scripts/qc_filter.py — drop low-quality cells from a spatial .h5ad.
+
+    Uses the karospace scientific interpreter (needs anndata/scipy). Filters
+    LOCALLY; the model receives only the aggregate before/after cell counts,
+    never a per-cell total or identifier.
+    """
+    if not QC_FILTER_SCRIPT.exists():
+        return RunResult(127, "", f"qc_filter script missing: {QC_FILTER_SCRIPT}")
+    argv = [merge_python(), str(QC_FILTER_SCRIPT), input_path, "-o", output]
+    if min_counts and min_counts > 0:
+        argv += ["--min-counts", str(min_counts)]
+    if min_genes and min_genes > 0:
+        argv += ["--min-genes", str(min_genes)]
     return run(argv, timeout=timeout)
 
 

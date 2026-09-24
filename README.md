@@ -238,7 +238,7 @@ python -m pip install -e ./app
 ```
 
 The project's `.codex/config.toml` connects the `karospace` stdio MCP server,
-exposing all 17 tools from the standalone app: inspection, GEO acquisition,
+exposing all 20 tools from the standalone app: inspection, GEO acquisition,
 R conversion, preparation (clustering, section splitting, local split preview,
 notebook hand-off), enrichment, export, packaging, and validation.
 Restart Codex after setup, trust this project if prompted, and check `/mcp`

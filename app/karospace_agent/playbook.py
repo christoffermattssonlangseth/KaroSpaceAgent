@@ -49,12 +49,15 @@ for it.
 Acquire  — geo_manifest      list a GEO accession's samples/files/platform (public metadata).
            geo_build         download only the matrix members of chosen samples -> local .h5ad.
            geo_fetch_file    download ONE supplementary file geo_build skips (e.g. an analyzed *_object.rds) to disk.
+           ingest_xenium     assemble a LOCAL folder of raw Xenium output-* bundles -> one .h5ad (the local twin of geo_build).
            rds_inspect       schema of an R .rds/.RData object (Seurat/SCE): assays, layers, embeddings, has_spatial.
            rds_convert       convert an .rds/.RData -> .h5ad (R backend) to keep the authors' annotations/embeddings.
+           rds_validate      read a produced .h5ad back through the R backend to confirm assays/embeddings/coords landed.
 Inspect  — inspect_input     sanitized obs/feature metadata for a file. ALWAYS call first.
            inspect_structure X dtype + is-integer, layers, obsm, obsp (graph present?).
            cli_help          verify a flag exists before using it. Never invent flags.
-Prepare  — run_preprocess    add a leiden clustering when a raw file has no annotations (writes obs['leiden']).
+Prepare  — qc_filter        drop low-quality cells (min_counts / min_genes) from a raw matrix before enrich/export.
+           run_preprocess    add a leiden clustering when a raw file has no annotations (writes obs['leiden']).
            generate_notebook  hand off heavier prep (CellCharter spatial domains) as a notebook the researcher runs.
            merge_sections    merge per-section files that lack sample metadata.
            split_sections    split multiple tissue pieces sharing one sample_id into per-piece sections (spatial gaps).
@@ -125,8 +128,32 @@ raw matrix — convert it first with the rds2h5ad R backend:
   that as the input and continue from §0. Such a file usually already carries
   annotations, so §1b is skipped — but still run §5 (companion) and set §3
   normalization from the structure probe as usual.
+- After rds_convert, optionally call rds_validate on the written .h5ad: it reads
+  the file back through the R backend and reports the assays (with dims),
+  embeddings, obs/var column names and spatial dims that actually landed. It costs
+  one cheap read and crosses no data — a good check that a large multi-assay
+  object converted the way you expected before you build on it.
 - rds2h5ad needs R + zellkonverter locally; if it's missing the tool says so —
-  relay that and fall back to the raw-matrix path rather than failing the job."""
+  relay that and fall back to the raw-matrix path rather than failing the job.
+
+## 0d. Ingest a LOCAL folder of raw Xenium bundles
+When the user hands you a directory of raw Xenium output on disk (not a .h5ad, not
+a GEO accession) — one or more 'output-*' bundles, each a folder with
+cell_feature_matrix.h5 + cells.parquet / cells.csv.gz — assemble it with
+ingest_xenium (the local twin of geo_build):
+- Point input_path at the parent directory; it discovers every bundle beneath it
+  (or pass a single bundle folder). It builds raw counts into X, drops control
+  probes (include_control=true to keep them), sets obsm['spatial'] from the
+  centroids, and tags each cell with a sample_id from its relative bundle path
+  (folder name for a single bundle), then concatenates all bundles into one file.
+  Use exclude=[...] to skip bundles whose
+  folder name contains a substring (e.g. a control section).
+- The read + assembly run LOCALLY; you get back only aggregate counts (samples,
+  cells, genes, per-sample sizes) — never a folder name, path, or coordinate.
+- Optional min_counts / min_genes apply the §1c QC inline; leave them 0 (default)
+  to keep the raw ingest lossless and run qc_filter as a separate, reviewable step.
+- The result is a fresh raw file exactly like a geo_build one: no clustering yet,
+  so continue from §0 — §1b (run_preprocess) applies, as do §5 and §3."""
 
 # --- Stage: Inspect (single-section trap + read the schema) ----------------
 
@@ -219,7 +246,27 @@ biological choice of domain count stay with the researcher, and you cannot
 continue the build in this session. After writing the notebook, tell the user to
 run it and come back with the annotated file; then resume from §0. Choose
 run_preprocess for "just make me a viewer", generate_notebook for "I want to run
-CellCharter / own the analysis"."""
+CellCharter / own the analysis".
+
+## 1c. QC-filter a raw matrix — optional, before clustering
+Raw Xenium and other targeted panels carry a tail of near-empty cells
+(segmentation debris, tile-edge fragments) that add noise to clustering and DE.
+When the input contains raw counts in X (a fresh ingest_xenium / geo_build file,
+or a file the researcher confirms contains raw counts), you may drop them with
+qc_filter before §1b: set min_counts and/or min_genes (the reference pipelines use ~40 counts /
+~15 genes for Xenium panels; treat these as a starting point, not a rule) and it
+writes a filtered .h5ad, returning only the aggregate before/after cell counts.
+Always choose a new output path; QC refuses to overwrite existing files or its
+input. X is checked locally for finite, nonnegative, integer-valued counts.
+If qc_counts_required is returned, use the raw-count input; do not round or
+otherwise alter normalized values to bypass the check. Layers are not selected
+automatically, and schema alone does not establish raw-count provenance.
+This is OPTIONAL and off unless you set a threshold — skip it for an already-QC'd
+or researcher-supplied file, and never filter silently on sensitive data without
+saying you did. In conversation, if the counts look untrimmed, offer it rather
+than assuming. (ingest_xenium can also apply the same filter inline via its
+min_counts / min_genes, but a separate qc_filter step is easier to review and
+re-run at a different threshold.)"""
 
 # --- Stage: Design (core flags + statistics/normalization) -----------------
 

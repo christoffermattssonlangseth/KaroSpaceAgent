@@ -32,6 +32,15 @@ def _number(value: str) -> int:
     return int(value.replace(",", ""))
 
 
+def _as_list(value) -> list:
+    """Normalize a jsonlite field to a list. auto_unbox=TRUE collapses a length-1
+    R vector to a scalar and drops an absent field to None, so a name list can
+    arrive as None, a scalar, or a list — treat all three uniformly."""
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
 class ApprovedMessage(str):
     """One-use message minted only after a local draft is explicitly approved."""
     def __new__(cls, text, token):
@@ -211,6 +220,14 @@ class Boundary:
                 ("split_invalid_coordinates", "split_invalid_coordinates"),
                 ("split_existing_column", "split_existing_column"),
                 ("split_density_too_high", "split_density_too_high"),
+                ("ingest_input_unsupported", "ingest_input_unsupported"),
+                ("ingest_no_bundles", "ingest_no_bundles"),
+                ("ingest_output_exists", "ingest_output_exists"),
+                ("qc_input_unsupported", "qc_input_unsupported"),
+                ("qc_no_threshold", "qc_no_threshold"),
+                ("qc_counts_required", "qc_counts_required"),
+                ("qc_output_same_as_input", "qc_output_same_as_input"),
+                ("qc_output_exists", "qc_output_exists"),
             ):
                 if needle in text:
                     diagnostic = fixed
@@ -292,6 +309,37 @@ class Boundary:
             for key, kind in (("selected_assay", "assay"), ("x_name", "layer")):
                 if isinstance(schema.get(key), str):
                     data[key] = self.alias(schema[key], kind)
+        elif name == "rds_validate":
+            # Schema-only read-back of a written .h5ad. jsonlite auto_unbox turns a
+            # length-1 vector into a scalar, so coerce every name field to a list.
+            # NAMES and COUNTS only; the local `input` path is never forwarded.
+            schema = json.loads(stdout)
+            if not isinstance(schema, dict) or type(schema.get("cells")) is not int:
+                raise ValueError("unknown validate schema")
+            for key in ("cells", "genes"):
+                if type(schema.get(key)) is int:
+                    data[key] = schema[key]
+            dims_by_name = {}
+            for entry in _as_list(schema.get("assay_dims")):
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                    dims = entry.get("dims")
+                    dims_by_name[entry["name"]] = [int(d) for d in dims] if isinstance(dims, list) else None
+            data["assays"] = []
+            for a in _as_list(schema.get("assays")):
+                if isinstance(a, str):
+                    item = {"name": self.alias(a, "assay")}
+                    if dims_by_name.get(a):
+                        item["dims"] = dims_by_name[a]
+                    data["assays"].append(item)
+            reduced = [r for r in _as_list(schema.get("reduced_dims")) if isinstance(r, str)]
+            data["reduced_dims"] = [{"name": self.alias(r, "embedding"), "role_hints": _hints(r)}
+                                    for r in reduced]
+            for key, kind in (("obs_columns", "col"), ("var_columns", "col")):
+                data[key] = [{"name": self.alias(c, kind), "role_hints": _hints(c)}
+                             for c in _as_list(schema.get(key)) if isinstance(c, str)]
+            data["has_spatial"] = "spatial" in reduced
+            if isinstance(schema.get("spatial_dims"), list):
+                data["spatial_dims"] = [int(d) for d in schema["spatial_dims"]]
         elif name == "geo_manifest":
             data["samples"] = []
             sample = None
@@ -372,6 +420,50 @@ class Boundary:
                 if not isinstance(group, dict) or type(group.get("pieces")) is not int or group["pieces"] < 1:
                     raise ValueError("invalid piece count")
                 data["groups"].append({"pieces": group["pieces"]})
+        elif name == "ingest_xenium":
+            # Aggregate counts only: how many bundles/cells/genes, and per-sample
+            # cell counts. The bundle folder names became sample_id VALUES in the
+            # written file and never cross; no path or coordinate crosses either.
+            match = re.search(r"(?m)^INGEST_XENIUM_JSON (\{.*\})$", stdout)
+            if not match:
+                raise ValueError("unknown ingest result")
+            summary = json.loads(match[1])
+            if not isinstance(summary, dict):
+                raise ValueError("invalid ingest summary")
+            for field in ("n_samples", "n_cells", "n_genes"):
+                if type(summary.get(field)) is not int or summary[field] < 1:
+                    raise ValueError("invalid ingest count")
+                data[field] = summary[field]
+            data["controls_dropped"] = bool(summary.get("controls_dropped"))
+            sizes = summary.get("sample_sizes")
+            if (not isinstance(sizes, list) or len(sizes) != data["n_samples"]
+                    or any(type(s) is not int or s < 1 for s in sizes)):
+                raise ValueError("invalid sample sizes")
+            if sum(sizes) != data["n_cells"] and summary.get("qc") is None:
+                raise ValueError("inconsistent ingest count")
+            data["sample_sizes"] = sizes
+            qc = summary.get("qc")
+            if qc is not None:
+                if not isinstance(qc, dict) or any(type(qc.get(k)) is not int for k in ("n_before", "n_after")):
+                    raise ValueError("invalid ingest qc")
+                data["qc"] = {"n_before": qc["n_before"], "n_after": qc["n_after"]}
+        elif name == "qc_filter":
+            # Aggregate before/after cell counts ONLY; no per-cell value crosses.
+            match = re.search(r"(?m)^QC_FILTER_JSON (\{.*\})$", stdout)
+            if not match:
+                raise ValueError("unknown qc result")
+            summary = json.loads(match[1])
+            if not isinstance(summary, dict):
+                raise ValueError("invalid qc summary")
+            for field in ("n_before", "n_after", "n_removed"):
+                if type(summary.get(field)) is not int or summary[field] < 0:
+                    raise ValueError("invalid qc count")
+                data[field] = summary[field]
+            if data["n_after"] > data["n_before"] or data["n_before"] - data["n_after"] != data["n_removed"]:
+                raise ValueError("inconsistent qc count")
+            for field in ("min_counts", "min_genes"):
+                if type(summary.get(field)) is int:
+                    data[field] = summary[field]
         if remote_args.get("output"):
             data["output"] = remote_args["output"]
         if remote_args.get("output_dir"):

@@ -564,17 +564,17 @@ def build_visium(samples: list[dict], cache: Path, include_control: bool, log: l
 
 # --- merscope / merfish assembler (Vizgen) ---------------------------------
 
-def _assemble_merscope_sample(sample: dict, cache: Path, include_control: bool, log: list[str]):
-    """Canonical Vizgen output: cell_by_gene.csv (counts) + cell_metadata.csv."""
+def _assemble_merscope_from_paths(gsm: str, cbg_path: Path, meta_path: Path,
+                                  include_control: bool, log: list[str]):
+    """Build one AnnData from an already-downloaded cell_by_gene + cell_metadata.
+
+    Shared core for the GEO merscope path and the local ingester, mirroring
+    _assemble_xenium_from_paths so a GEO-built and a locally-ingested Vizgen file
+    are structurally identical."""
     import anndata as ad
     import numpy as np
     import pandas as pd
     from scipy import sparse
-
-    gsm = sample["gsm"]
-    log.append(f"{gsm}: merscope")
-    cbg_path = _fetch_file(sample, cache, log, "cell_by_gene", role="counts")
-    meta_path = _fetch_file(sample, cache, log, "cell_metadata", role="metadata")
 
     cbg = pd.read_csv(cbg_path, index_col=0)
     cbg.index = cbg.index.astype(str)
@@ -599,6 +599,15 @@ def _assemble_merscope_sample(sample: dict, cache: Path, include_control: bool, 
         a.obsm["spatial"] = obs[["center_x", "center_y"]].to_numpy(np.float32)
     log.append(f"  assembled: {a.n_obs} cells x {a.n_vars} genes")
     return a
+
+
+def _assemble_merscope_sample(sample: dict, cache: Path, include_control: bool, log: list[str]):
+    """Canonical Vizgen output: cell_by_gene.csv (counts) + cell_metadata.csv."""
+    gsm = sample["gsm"]
+    log.append(f"{gsm}: merscope")
+    cbg_path = _fetch_file(sample, cache, log, "cell_by_gene", role="counts")
+    meta_path = _fetch_file(sample, cache, log, "cell_metadata", role="metadata")
+    return _assemble_merscope_from_paths(gsm, cbg_path, meta_path, include_control, log)
 
 
 def build_merscope(samples: list[dict], cache: Path, include_control: bool, log: list[str]):

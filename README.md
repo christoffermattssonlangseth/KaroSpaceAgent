@@ -21,17 +21,19 @@ Xenium, Visium, and MERSCOPE/MERFISH (Vizgen) layouts are supported; other
 platforms report what an assembler would need. Only public GEO catalogue
 metadata crosses the boundary; the download and assembly run locally.
 
-It can also **ingest a local folder of raw Xenium output bundles**: `ingest_xenium`
-walks a directory of `output-*` bundles (each a `cell_feature_matrix.h5` +
-`cells.parquet` / `cells.csv`), assembles them with the same core the GEO builder
-uses — so a locally-ingested and a GEO-built `.h5ad` are structurally identical —
-and concatenates them into one file with a per-cell `sample_id`. `qc_filter` is a
-standalone step that drops low-quality cells by total counts / detected genes
-before clustering, and R objects can be **converted and checked** with
-`rds_convert` / `rds_validate` (Seurat / SingleCellExperiment via rds2h5ad). All
-of these run locally; only aggregate counts (samples, cells, genes, before/after)
-cross the boundary — never a bundle folder name (which becomes a `sample_id`
-value), a path, or a coordinate.
+It can also **ingest a local folder of raw spatial output bundles**: `ingest_spatial`
+walks a directory of bundles, auto-detecting the vendor layout per bundle — Xenium
+(`cell_feature_matrix.h5` + `cells.parquet` / `cells.csv`) and MERSCOPE / MERFISH
+(Vizgen's `cell_by_gene.csv` + `cell_metadata.csv`), and a folder mixing both is
+fine — assembles them with the same cores the GEO builder uses (so a locally-ingested
+and a GEO-built `.h5ad` are structurally identical), and concatenates them into one
+file with a per-cell `sample_id`. `qc_filter` is a standalone step that drops
+low-quality cells by total counts / detected genes before clustering, and R objects
+can be **converted and checked** with `rds_convert` / `rds_validate` (Seurat /
+SingleCellExperiment via rds2h5ad). All of these run locally; only aggregate counts
+(samples, cells, genes, per-platform bundle counts, before/after) cross the boundary
+— never a bundle folder name (which becomes a `sample_id` value), a path, or a
+coordinate.
 
 It exists because getting from raw data to a good viewer means choosing ~30
 correct flags for a messy dataset — and *knowing which choices are right* takes

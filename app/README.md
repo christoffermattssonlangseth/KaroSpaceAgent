@@ -274,6 +274,53 @@ It is a workflow check, not an operating-system memory limit. Raw-count validati
 does not establish provenance or prove that integer-valued data was never normalized.
 It also does not establish consent or make restricted data safe for cloud use.
 
+### Offline chat (macOS Apple Silicon)
+
+Use an already-downloaded MLX model and a Python environment with the `offline`
+extra installed. Dependency/model acquisition happens before a restricted-data
+session. Tk is required for the native window (included with many Python builds).
+
+```bash
+pip install -e '.[offline]'
+karospace-agent app /path/to/input.h5ad --offline --local-model /path/to/local-mlx-model
+```
+
+`chat --offline` provides the terminal equivalent. `--offline-python /path/to/python`
+selects a separate runtime. In a source checkout, `.venv-offline/bin/python` is
+used if present. If `--local-model` is omitted, the app looks for an existing
+`output/offline-models/qwen2.5-0.5b-instruct-4bit` directory in the checkout,
+then a cached `mlx-community/Qwen2.5-0.5B-Instruct-4bit` snapshot, then the larger
+cached `mlx-community/Qwen3-4B-Instruct-2507-4bit`. It never downloads a model.
+The small model uses less CPU; larger models generally reason better but can
+take several minutes per turn in this CPU-only mode.
+Small models (up to roughly 600 million parameters) are expanded in memory
+to use faster CPU matrix operations. Allow about 1–2 GB for their weights,
+plus runtime/context memory. Larger models keep their quantized weights.
+
+This launches a native plain-text window with an in-process CPU model. The OS
+blocks network access for the app and its child processes, including connections
+to localhost and Unix sockets. Section previews are displayed as local PNGs.
+The process verifies its restrictions before loading the model or input. Files
+created by the session stay in a new private folder under
+`~/Library/Application Support/KaroSpaceAgent/offline/`; the terminal and window
+show its exact location. Provider credentials/proxy settings are not inherited.
+The selected input and model are read-only, and unrelated data files are blocked.
+New input access requires restarting with that input selected.
+
+CPU replies can be slow. Network-dependent acquisition/analytics are unavailable,
+and viewers are saved rather than opened automatically. **Stop and close** stops
+the session and its tools. Existing cloud modes are unchanged. This protects the
+app's process tree; it cannot control unrelated backup/sync applications or
+establish permission under a donation agreement.
+
+`karospace-agent isolation-check` tests OS-level network denial separately
+using synthetic socket operations and a child process. It loads no dataset or
+model and returns only fixed diagnostics. Failure is never treated as permission
+to run without isolation. This diagnostic alone does **not** switch the app
+offline; use `--offline` for a confined session. See the
+[offline isolation design](../docs/design/offline-isolation.md) for enforcement
+details, platform limits and the remaining work.
+
 ### Adding UMAP to an analyzed dataset
 
 `add_umap` writes a new `.h5ad` with a 2D `X_umap` using an existing PCA or latent

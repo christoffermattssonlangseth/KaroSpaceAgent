@@ -154,6 +154,39 @@ def test_offline_inspect_uses_selected_path_and_filters_before_model_context(tmp
     assert not model.requests
 
 
+def test_free_chat_seeds_inspection_before_first_model_turn(tmp_path, monkeypatch):
+    selected = tmp_path / "selected.h5ad"
+    selected.touch()
+    calls = []
+    async def inspect(args):
+        calls.append(args)
+        return {"_local": {"returncode": 0, "stdout": "Cells: 3\nAvailable cell metadata (adata.obs):\n  - some_col [categorical; 2 values; 0 missing]\n"}}
+    async def structure(args):
+        calls.append(args)
+        return {"_local": {"returncode": 0, "stdout": "X: dtype=float32, format=dense, all_integer=yes\nobsm: (none)\nspatial_graph_present: no"}}
+    monkeypatch.setattr(tools.inspect_input, "handler", inspect)
+    monkeypatch.setattr(tools.inspect_structure, "handler", structure)
+    model = Model(['{"message":"Here is the plan."}'])
+    session = offline_session.OfflineSession(config(tmp_path) | {"input_path": str(selected)}, model_factory=lambda _: model, on_event=lambda _: None)
+    assert session.send("go ahead") == "Here is the plan."
+    # Inspection ran once, before the model's only turn, and reached its context.
+    assert len(calls) == 2 and all(call["input_path"] == str(selected) for call in calls)
+    assert "spatial_graph_present" in model.requests[0]
+    # A later free-chat turn reuses the seeded schema instead of re-inspecting.
+    model.replies = iter(['{"message":"Still here."}'])
+    assert session.send("continue") == "Still here."
+    assert len(calls) == 2
+
+
+def test_free_chat_without_selected_dataset_does_not_inspect(tmp_path, monkeypatch):
+    def forbidden(*a, **kw):
+        pytest.fail("no dataset selected; nothing to inspect")
+    monkeypatch.setattr(commands, "run", forbidden)
+    model = Model(['{"message":"Choose a dataset first."}'])
+    session = offline_session.OfflineSession(config(tmp_path), model_factory=lambda _: model, on_event=lambda _: None)
+    assert session.send("make a viewer") == "Choose a dataset first."
+
+
 def test_offline_inspect_without_selected_file_does_not_run_tools(tmp_path, monkeypatch):
     monkeypatch.setattr(commands, "run", lambda *a, **kw: pytest.fail("no selected input"))
     session = offline_session.OfflineSession(config(tmp_path), model_factory=lambda _: Model([]), on_event=lambda _: None)

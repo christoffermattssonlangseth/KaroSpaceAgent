@@ -23,8 +23,15 @@ def model_path(value=None):
         path = Path(value).expanduser().resolve(strict=True)
     else:
         cache = Path.home() / ".cache/huggingface/hub"
-        candidates = [ROOT / "output/offline-models/qwen2.5-0.5b-instruct-4bit"]
-        for name in ("Qwen2.5-0.5B-Instruct-4bit", "Qwen3-4B-Instruct-2507-4bit"):
+        # Prefer a capable instruct model and fall back toward smaller ones only
+        # when nothing larger is present. A ~4B model reliably drives the JSON
+        # tool loop on CPU; the 0.5B is a last resort — it tends to parrot the
+        # few-shot and answer "Done." without ever calling a tool.
+        bundled = ROOT / "output/offline-models"
+        candidates = [bundled / "qwen3-4b-instruct-2507-4bit",
+                      bundled / "qwen2.5-3b-instruct-4bit",
+                      bundled / "qwen2.5-0.5b-instruct-4bit"]
+        for name in ("Qwen3-4B-Instruct-2507-4bit", "Qwen2.5-3B-Instruct-4bit", "Qwen2.5-0.5B-Instruct-4bit"):
             candidates.extend(sorted((cache / ("models--mlx-community--" + name) / "snapshots").glob("*")))
         path = next((p for p in candidates if (p / "config.json").is_file()), None)
         if path is None:

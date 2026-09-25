@@ -135,13 +135,18 @@ inspection for review. It does not export or modify the dataset. Custom opening
 requests still go to the model. R inputs and multi-table SpatialData may need
 additional options through the tool loop.
 
-The small default CPU model is not a reliable autonomous viewer planner: live
-checks have shown invented tool names and incorrect arguments. The registered
-export/preprocessing tools are available, but a successful greeting or `/tools`
-response does not establish that a complete model-driven export works. Check
-actual tool/history results. A larger already-downloaded 4B model failed to
-finish a tool-use check within three minutes on the current CPU setup; it is
-not enabled by default.
+A small (~0.5B) CPU model is not a reliable autonomous viewer planner: live
+checks have shown invented tool names, incorrect arguments, and "Done." replies
+with no tool call. The launcher therefore prefers the most capable
+already-downloaded model (a ~3-4B instruct model, e.g.
+`Qwen3-4B-Instruct-2507-4bit`), falling back to the 0.5B only when nothing
+larger is present. When a dataset is selected, its schema is inspected
+automatically (schema only, no data values) before the model's first turn, so it
+starts grounded rather than guessing. A 4B model reasons far better but is slow
+on CPU — it may take several minutes per turn, and a single tool-use check can
+exceed three minutes on this setup. The registered export/preprocessing tools
+are available, but a successful greeting or `/tools` response does not establish
+that a complete model-driven export works. Check actual tool/history results.
 
 This is a local bundle, ad-hoc signed for this Mac. It reuses the normal app's
 HTML/CSS interface, with offline labels and private pipes replacing HTTP/SSE.

@@ -197,9 +197,9 @@
     align-self: flex-start; background: var(--tool-bg); color: var(--muted-color);
     font: 13px/1.5 var(--mono); padding: 8px 12px; border-radius: 6px;
     border: 1px solid var(--border-color); box-shadow: none;
-    display: flex; align-items: baseline; gap: 6px;
+    overflow-wrap: anywhere;
   }
-  .msg.tool::before { content: "⚙"; color: var(--accent); }
+  .msg.tool::before { content: "⚙ "; color: var(--accent); }
   .msg.error {
     align-self: stretch; background: var(--danger-bg); color: var(--danger-text);
     border: 1px solid var(--danger-border);
@@ -235,6 +235,7 @@
   .msg.md code {
     font-family: var(--mono); font-size: 0.88em; padding: 1px 5px;
     background: var(--tool-bg); border: 1px solid var(--border-color); border-radius: 4px;
+    overflow-wrap: anywhere;
   }
   .msg.md pre {
     background: var(--tool-bg); border: 1px solid var(--border-color); border-radius: 6px;
@@ -246,8 +247,8 @@
     border-left: 3px solid var(--accent-border); color: var(--muted-color);
   }
   .msg.md hr { border: none; border-top: 1px solid var(--border-color); margin: 0.8em 0; }
-  .msg.md table { border-collapse: collapse; margin: 0.6em 0; font-size: 0.95em; }
-  .msg.md th, .msg.md td { border: 1px solid var(--border-color); padding: 4px 9px; text-align: left; }
+  .msg.md table { border-collapse: collapse; margin: 0.6em 0; font-size: 0.95em; width: 100%; max-width: 100%; }
+  .msg.md th, .msg.md td { border: 1px solid var(--border-color); padding: 4px 9px; text-align: left; overflow-wrap: anywhere; }
   .msg.md th { background: var(--tool-bg); font-weight: 600; }
 
   details#progress { border-top: 1px solid var(--border-color); background: var(--panel-bg); }

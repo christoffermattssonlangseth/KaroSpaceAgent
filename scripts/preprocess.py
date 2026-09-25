@@ -5,12 +5,13 @@ KaroSpace-ingestible.
 A freshly acquired dataset (e.g. from geo_fetch.py) has raw counts + coordinates
 but NO cell-type / cluster columns in obs — so a viewer built from it can only be
 coloured gene-by-gene. This runs the standard scanpy path
-(normalize -> log1p -> HVG -> PCA -> neighbors -> leiden) LOCALLY to add a
-`leiden` annotation, writing:
+(normalize -> log1p -> HVG -> PCA -> neighbors -> UMAP -> leiden) LOCALLY to add a
+`leiden` annotation and a 2D UMAP embedding, writing:
 
     layers['counts']      raw counts (preserved; X is restored to it at the end)
     layers['normalized']  library-size + log1p (the layer karospace should colour from)
     obs['leiden']         the clustering (feeds --main-cell-annotation / --cell-annotations)
+    obsm['X_umap']        2D UMAP the viewer auto-detects (skipped if one already exists)
 
 Boundary: the heavy compute runs here, on the machine that holds the data. The
 only thing printed is an AGGREGATE log — cell/gene counts, cluster count, and
@@ -61,6 +62,7 @@ def run_preprocess(
     n_pcs: int = 50,
     n_hvg: int = 2000,
     key: str = DEFAULT_KEY,
+    compute_umap: bool = True,
 ) -> list[str]:
     """Cluster `input_path` and write an ingestible file to `output`.
 
@@ -105,6 +107,17 @@ def run_preprocess(
     sc.pp.neighbors(adata, n_neighbors=n_neighbors, n_pcs=n_comps)
     _log(log, f"PCA comps: {n_comps}   neighbors k: {n_neighbors}")
 
+    # A 2D UMAP the viewer auto-detects from obsm. Reuses the neighbours graph
+    # just built. Keep any embedding the input already carries — the goal is to
+    # fill the gap when none is present, not to overwrite an author's UMAP.
+    if "X_umap" in adata.obsm:
+        _log(log, "UMAP: obsm['X_umap'] already present -> kept as-is")
+    elif compute_umap:
+        sc.tl.umap(adata)
+        _log(log, "UMAP: computed obsm['X_umap'] (2D) from the neighbours graph")
+    else:
+        _log(log, "UMAP: skipped (--no-umap); no obsm['X_umap'] written")
+
     try:
         sc.tl.leiden(
             adata, resolution=resolution, key_added=key,
@@ -129,7 +142,8 @@ def run_preprocess(
     _log(
         log,
         f"wrote: {output}  (obs adds '{key}'; layers: "
-        f"{', '.join(sorted(adata.layers.keys())) or 'none'})",
+        f"{', '.join(sorted(adata.layers.keys())) or 'none'}; obsm: "
+        f"{', '.join(sorted(adata.obsm.keys())) or 'none'})",
     )
     return log
 
@@ -144,12 +158,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--n-pcs", type=int, default=50, help="PCA components (default 50).")
     p.add_argument("--n-hvg", type=int, default=2000, help="HVG target; skipped if panel <= this.")
     p.add_argument("--key", default=DEFAULT_KEY, help="obs column name for the clustering.")
+    p.add_argument("--no-umap", dest="umap", action="store_false",
+                   help="Do not compute obsm['X_umap'] (a UMAP is added by default when absent).")
     args = p.parse_args(argv)
 
     log = run_preprocess(
         args.input, args.output,
         method=args.method, resolution=args.resolution,
         n_neighbors=args.n_neighbors, n_pcs=args.n_pcs, n_hvg=args.n_hvg, key=args.key,
+        compute_umap=args.umap,
     )
     print("\n".join(log))
     return 0

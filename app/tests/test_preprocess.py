@@ -36,6 +36,21 @@ def test_run_preprocess_argv_carries_params(monkeypatch):
     assert "-o" in argv and "out.h5ad" in argv
     assert "--resolution" in argv and "0.5" in argv
     assert "--key" in argv and "clusters" in argv
+    # UMAP is on by default, so no opt-out flag is passed.
+    assert "--no-umap" not in argv
+
+
+def test_run_preprocess_argv_opts_out_of_umap(monkeypatch):
+    captured = {}
+
+    def fake_run(argv, timeout=0):
+        captured["argv"] = argv
+        return commands.RunResult(0, "", "")
+
+    monkeypatch.setattr(commands, "run", fake_run)
+    monkeypatch.setattr(commands, "merge_python", lambda: "PY")
+    commands.run_preprocess("in.h5ad", "out.h5ad", compute_umap=False)
+    assert "--no-umap" in captured["argv"]
 
 
 def test_unsupported_method_fails_loudly_without_scanpy():
@@ -79,8 +94,58 @@ def test_end_to_end_adds_leiden_and_preserves_raw_counts(tmp_path):
     r = ad.read_h5ad(out)
     assert "leiden" in r.obs.columns
     assert "counts" in r.layers and "normalized" in r.layers
+    # A 2D UMAP the viewer auto-detects is written when the input lacks one.
+    assert "X_umap" in r.obsm and r.obsm["X_umap"].shape == (120, 2)
     # X must be restored to raw integer counts for ingestion.
     x = r.X.data if sp.issparse(r.X) else np.asarray(r.X).ravel()
     assert np.all(np.mod(x, 1) == 0)
     # The log is aggregate-only: mentions cluster count, never a cell label.
     assert any("clusters" in line for line in log)
+
+
+def test_existing_umap_is_kept_not_recomputed(tmp_path):
+    pytest.importorskip("scanpy")
+    import anndata as ad
+    import numpy as np
+    import scipy.sparse as sp
+
+    pre = load_preprocess()
+    rng = np.random.default_rng(1)
+    counts = rng.poisson(2.0, size=(80, 30)).astype(np.float32)
+    a = ad.AnnData(X=sp.csr_matrix(counts))
+    a.obs_names = [f"c{i}" for i in range(80)]
+    a.var_names = [f"g{j}" for j in range(30)]
+    # A sentinel embedding the author already shipped — must survive untouched.
+    sentinel = np.arange(80 * 2, dtype=np.float32).reshape(80, 2)
+    a.obsm["X_umap"] = sentinel.copy()
+    inp = tmp_path / "raw.h5ad"
+    a.write_h5ad(inp)
+
+    out = tmp_path / "clustered.h5ad"
+    log = pre.run_preprocess(str(inp), str(out))
+
+    r = ad.read_h5ad(out)
+    assert np.array_equal(np.asarray(r.obsm["X_umap"]), sentinel)
+    assert any("already present" in line for line in log)
+
+
+def test_no_umap_flag_skips_embedding(tmp_path):
+    pytest.importorskip("scanpy")
+    import anndata as ad
+    import numpy as np
+    import scipy.sparse as sp
+
+    pre = load_preprocess()
+    rng = np.random.default_rng(2)
+    counts = rng.poisson(2.0, size=(80, 30)).astype(np.float32)
+    a = ad.AnnData(X=sp.csr_matrix(counts))
+    a.obs_names = [f"c{i}" for i in range(80)]
+    a.var_names = [f"g{j}" for j in range(30)]
+    inp = tmp_path / "raw.h5ad"
+    a.write_h5ad(inp)
+
+    out = tmp_path / "clustered.h5ad"
+    pre.run_preprocess(str(inp), str(out), compute_umap=False)
+
+    r = ad.read_h5ad(out)
+    assert "X_umap" not in r.obsm

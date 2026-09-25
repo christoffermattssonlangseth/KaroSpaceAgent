@@ -50,7 +50,7 @@ class Model:
         self.replies = iter(replies)
         self.requests = []
 
-    def complete(self, messages):
+    def complete(self, messages, **kwargs):
         self.requests.append(json.dumps(messages))
         return next(self.replies)
 
@@ -176,6 +176,87 @@ def test_free_chat_seeds_inspection_before_first_model_turn(tmp_path, monkeypatc
     model.replies = iter(['{"message":"Still here."}'])
     assert session.send("continue") == "Still here."
     assert len(calls) == 2
+
+
+def test_propose_candidates_ranks_by_role_and_drops_numeric():
+    from karospace_agent.offline_session import propose_candidates
+    columns = [
+        {"name": "col_1", "type": "categorical", "cardinality": 4, "role_hints": ["section"]},
+        {"name": "col_2", "type": "categorical", "cardinality": 12, "role_hints": ["cell_annotation"]},
+        {"name": "col_3", "type": "numeric", "cardinality": 9999, "role_hints": ["quality_control"]},
+        {"name": "col_4", "type": "categorical", "cardinality": 3, "role_hints": ["replicate"]},
+    ]
+    out = propose_candidates(columns)
+    assert out["section"][0].startswith("col_1")                       # explicit section hint first
+    assert any(c.startswith("col_4") for c in out["section"])          # replicate as a fallback key
+    assert out["annotation"][0].startswith("col_2")
+    assert all("col_3" not in c for c in out["section"] + out["annotation"])  # numeric QC never offered
+
+
+def test_seeded_candidate_hints_use_roles_and_aliases_only(tmp_path, monkeypatch):
+    selected = tmp_path / "selected.h5ad"
+    selected.touch()
+    async def inspect(args):
+        return {"_local": {"returncode": 0, "stdout":
+            "Cells: 100\nAvailable cell metadata (adata.obs):\n"
+            "  - orig.ident [categorical; 4 values; 0 missing]\n"
+            "  - leiden [categorical; 12 values; 0 missing]\n"}}
+    async def structure(args):
+        return {"_local": {"returncode": 0, "stdout":
+            "X: dtype=float32, format=dense, all_integer=yes\nobsm: (none)\nspatial_graph_present: no"}}
+    monkeypatch.setattr(tools.inspect_input, "handler", inspect)
+    monkeypatch.setattr(tools.inspect_structure, "handler", structure)
+    model = Model(['{"message":"planned"}'])
+    session = offline_session.OfflineSession(config(tmp_path) | {"input_path": str(selected)}, model_factory=lambda _: model, on_event=lambda _: None)
+    session.send("build a viewer")
+    seeded = model.requests[0]
+    assert "Local candidate hints" in seeded
+    assert "roles: section" in seeded and "roles: cell_annotation" in seeded
+    assert "col_" in seeded
+    # The real column names never cross — only their aliases and role hints do.
+    assert "orig.ident" not in seeded and "leiden" not in seeded
+
+
+def test_objective_advances_only_as_tools_succeed(tmp_path):
+    model = Model([])
+    session = offline_session.OfflineSession(config(tmp_path), model_factory=lambda _: model, on_event=lambda _: None)
+    assert "call run_export" in session._objective()
+    session._done.add("run_export")
+    assert "Call validate_output" in session._objective()
+    session._done.add("validate_output")
+    assert "report completion" in session._objective()
+
+
+def test_state_machine_injects_and_advances_objective_on_export(tmp_path, monkeypatch):
+    selected = tmp_path / "selected.h5ad"
+    selected.touch()
+    async def inspect(args):
+        return {"_local": {"returncode": 0, "stdout": "Cells: 3\nAvailable cell metadata (adata.obs):\n  - some_col [categorical; 2 values; 0 missing]\n"}}
+    async def structure(args):
+        return {"_local": {"returncode": 0, "stdout": "X: dtype=float32, format=dense, all_integer=yes\nobsm: (none)\nspatial_graph_present: no"}}
+    async def export(args):
+        return {"_local": {"returncode": 0, "stdout": "Wrote viewer."}}
+    monkeypatch.setattr(tools.inspect_input, "handler", inspect)
+    monkeypatch.setattr(tools.inspect_structure, "handler", structure)
+    monkeypatch.setattr(tools.run_export, "handler", export)
+    session = offline_session.OfflineSession(config(tmp_path) | {"input_path": str(selected)}, model_factory=lambda _: Model([]), on_event=lambda _: None)
+    alias = session.boundary.register_path(str(selected))
+    call = json.dumps({"tool": "run_export", "arguments": {"input_path": alias, "output": "/karo/output/viewer.html", "flags": []}})
+    session.model = Model([call, '{"message":"Exported; next I will validate."}'])
+    model = session.model
+    assert session.send("build a viewer") == "Exported; next I will validate."
+    # The export objective steered the first turn; the second turn was re-steered
+    # to validation only because run_export actually succeeded.
+    assert "call run_export" in model.requests[0]
+    assert "Call validate_output" in model.requests[1]
+    assert session._done == {"run_export"}
+
+
+def test_no_objective_is_injected_without_a_selected_dataset(tmp_path):
+    model = Model(['{"message":"Nothing to build."}'])
+    session = offline_session.OfflineSession(config(tmp_path), model_factory=lambda _: model, on_event=lambda _: None)
+    session.send("hello")
+    assert "Objective:" not in model.requests[0]
 
 
 def test_free_chat_without_selected_dataset_does_not_inspect(tmp_path, monkeypatch):

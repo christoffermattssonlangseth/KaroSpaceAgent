@@ -9,6 +9,7 @@ import jsonschema
 
 from . import commands, tools
 from .history import RunHistory
+from .offline_grammar import EnvelopeGrammar
 from .privacy import Boundary
 from .tool_worker import tool_specs
 
@@ -65,8 +66,61 @@ class LocalModel:
         if parameters <= 600_000_000:
             self.model = dequantize_model(self.model)
             mx.eval(self.model.parameters())
+        self._id_texts = None          # id -> its decoded piece (built once, lazily)
+        self._structural_cache = {}    # charset -> [(id, piece)] usable in the skeleton
 
-    def complete(self, messages, max_tokens=768):
+    def _structural_ids(self, charset):
+        """Token ids whose whole decoded piece stays inside the grammar's skeleton
+        charset — the only candidates worth scanning while the envelope is typed."""
+        key = charset
+        if key in self._structural_cache:
+            return self._structural_cache[key]
+        if self._id_texts is None:
+            vocab = self.tokenizer.get_vocab()
+            size = max(vocab.values()) + 1
+            texts = []
+            for i in range(size):
+                try:
+                    texts.append(self.tokenizer.decode([i]))
+                except Exception:
+                    texts.append("")
+            self._id_texts = texts
+        eos = set(self.tokenizer.eos_token_ids)
+        usable = [(i, t) for i, t in enumerate(self._id_texts)
+                  if t and i not in eos and all(c in charset for c in t)]
+        self._structural_cache[key] = usable
+        return usable
+
+    def _envelope_processor(self, grammar, prompt_len):
+        """An mlx logits processor that masks every token which would break the
+        envelope grammar, releasing control once the free content region begins.
+        Fails open: if a step has no legal token it leaves the logits untouched
+        rather than making generation impossible."""
+        import mlx.core as mx
+        import numpy as np
+
+        structural = self._structural_ids(grammar.charset)
+        eos = list(self.tokenizer.eos_token_ids)
+
+        def processor(tokens, logits):
+            generated = tokens[prompt_len:].tolist()
+            text = self.tokenizer.decode(generated) if generated else ""
+            state = grammar.classify(text)
+            if state == "released":
+                return logits
+            if state == "complete":
+                allowed = eos
+            else:  # typing, or a drifted "invalid" we recover from by failing open
+                allowed = [i for i, piece in structural if grammar.classify(text + piece) != "invalid"]
+                if not allowed:
+                    return logits
+            mask = np.full((logits.shape[-1],), -1e9, dtype=np.float32)
+            mask[np.array(allowed, dtype=np.int64)] = 0.0
+            return logits + mx.array(mask).astype(logits.dtype)[None, :]
+
+        return processor
+
+    def complete(self, messages, max_tokens=768, grammar=None):
         import mlx.core as mx
         mx.set_default_device(mx.cpu)
         from mlx_lm.generate import generate_step
@@ -74,16 +128,43 @@ class LocalModel:
         encoded = self.tokenizer.encode(prompt, add_special_tokens=False)
         if len(encoded) > 16384:
             raise ValueError("Local context is full. Start a new offline session using the saved output.")
+        processors = [self._envelope_processor(grammar, len(encoded))] if grammar is not None else None
         # The high-level MLX generate() wrapper configures Metal wired memory,
         # even with a CPU default device. Use its public token generator directly.
         tokens = []
         for token, _ in generate_step(mx.array(encoded), self.model, max_tokens=max_tokens,
-                                      prefill_step_size=256):
+                                      prefill_step_size=256, logits_processors=processors):
             token = int(token)
             if token in self.tokenizer.eos_token_ids:
                 break
             tokens.append(token)
         return self.tokenizer.decode(tokens)
+
+
+def propose_candidates(columns):
+    """Rank the two choices a small model most often gets wrong — the section/
+    sample key and the main cell annotation — from filtered obs columns. Every
+    field used here (alias name, role_hints, cardinality, type) has already
+    crossed the boundary, so the hint carries no data values. Returns alias-only
+    display strings; empty lists mean nothing obvious, so the model should ask."""
+    def show(col):
+        roles = ",".join(col.get("role_hints", [])) or "none"
+        return f"{col.get('name')} (roles: {roles}; {col.get('cardinality', '?')} values)"
+
+    sections, annotations = [], []
+    for col in columns:
+        hints = set(col.get("role_hints", []))
+        card = col.get("cardinality") or 0
+        categorical = col.get("type") in {"categorical", "boolean", "text", "str", "string"}
+        if "section" in hints and card >= 2:
+            sections.append((0, card, col))
+        elif categorical and (hints & {"replicate", "condition"}) and 2 <= card <= 64:
+            sections.append((1, card, col))
+        if "cell_annotation" in hints:
+            annotations.append((0 if 2 <= card <= 100 else 1, card, col))
+    order = lambda item: (item[0], item[1])
+    return {"section": [show(c) for _, _, c in sorted(sections, key=order)][:4],
+            "annotation": [show(c) for _, _, c in sorted(annotations, key=order)][:4]}
 
 
 def parse_action(text):
@@ -112,6 +193,9 @@ class OfflineSession:
         self.on_event = on_event or (lambda text: print(text, flush=True))
         self.on_progress = on_progress or (lambda stream, line: None)
         self.specs = {s["name"]: s for s in tool_specs() if s["name"] in OFFLINE_TOOLS}
+        # Constrain generation to a valid envelope over exactly these tool names,
+        # so malformed JSON and invented tool names can never be produced.
+        self.grammar = EnvelopeGrammar(self.specs)
         # CPU inference benefits from progressive disclosure: only describe
         # tools being used, instead of repeatedly prefilling every schema.
         catalog = {name: spec["description"].split(". ", 1)[0] for name, spec in sorted(self.specs.items())}
@@ -150,6 +234,11 @@ class OfflineSession:
         # model's first planning turn (see _seed_inspection). This flag keeps it
         # from being re-inspected on later turns or after an explicit /inspect.
         self._seeded = False
+        # State-machine rails: the set of tools that have succeeded drives the one
+        # objective injected each turn, keeping a weak model from skipping the
+        # export/validation or declaring the viewer done before it exists.
+        self._done = set()
+        self._last_objective = None
         self.model = model_factory(config["model"])
 
     def send(self, text):
@@ -176,7 +265,14 @@ class OfflineSession:
         try:
             self._seed_inspection()
             for _ in range(MAX_STEPS):
-                raw = self.model.complete(self.messages)
+                # State-machine rails: pin the current objective for a dataset
+                # build, re-issuing it only when a tool success has advanced it.
+                if self._has_selected_dataset():
+                    objective = self._objective()
+                    if objective != self._last_objective:
+                        self.messages.append({"role": "user", "content": objective})
+                        self._last_objective = objective
+                raw = self.model.complete(self.messages, grammar=self.grammar)
                 self.messages.append({"role": "assistant", "content": raw})
                 try:
                     action = parse_action(raw)
@@ -207,6 +303,8 @@ class OfflineSession:
                         self.on_progress("status", f"Running {name} locally.\n")
                         definition = next(t for t in tools.ALL_TOOLS if t.name == name)
                         result = asyncio.run(self.boundary.invoke(definition, arguments))
+                        if not result.get("is_error"):
+                            self._done.add(name)  # advances the objective (state machine)
                 self.messages.append({"role": "user", "content": "Local tool result: " + json.dumps(result)})
             raise RuntimeError("The local model reached its tool-step limit. Review the local history before continuing.")
         finally:
@@ -216,13 +314,34 @@ class OfflineSession:
         selected = self.config.get("input_path")
         return bool(selected) and Path(selected).suffix.lower() in {".h5ad", ".zarr"}
 
+    def _objective(self):
+        """The single next goal, derived from which tools have already succeeded.
+
+        A weak model left to free-plan across MAX_STEPS drifts: it invents an
+        order, skips validation, or declares the viewer done before it exists.
+        Injecting one deterministic objective each turn — advanced only by real
+        tool successes (self._done) — turns the loop into a small state machine
+        (inspect → confirm columns → export → validate → report) without a rigid
+        dispatcher, so ordinary chat and tool use still flow through the model."""
+        if "run_export" not in self._done:
+            return ("Objective: confirm the section/sample key and the main cell annotation with the "
+                    "user (use the candidate hints; do not invent columns), then run check_readiness, "
+                    "verify flags with cli_help, and call run_export. Do not tell the user the viewer "
+                    "is finished before run_export has succeeded.")
+        if "validate_output" not in self._done:
+            return ("Objective: run_export succeeded. Call validate_output on the exported path before "
+                    "you report the result. Do not claim success until validation passes.")
+        return ("Objective: export and validation both succeeded. You may now report completion to the "
+                "user with a message.")
+
     def _run_inspection(self):
         """Run the two schema-only inspections on the selected dataset, appending
-        each filtered result to the local message history. Returns (ok, reports)
-        with display-safe text blocks. The caller owns the progress sink and marks
-        the session seeded; only aggregate schema — never data values — is kept."""
+        each filtered result to the local message history. Returns (ok, reports,
+        columns) — display-safe text blocks plus the parsed obs columns used for
+        candidate hints. The caller owns the progress sink and marks the session
+        seeded; only aggregate schema — never data values — is kept."""
         arguments = {"input_path": self.boundary.register_path(self.config["input_path"]), "spatialdata_table": ""}
-        reports, ok = [], True
+        reports, ok, columns = [], True, []
         for name in ("inspect_input", "inspect_structure"):
             self.on_progress("status", f"Running {name} locally.\n")
             definition = next(t for t in tools.ALL_TOOLS if t.name == name)
@@ -232,8 +351,17 @@ class OfflineSession:
                 ok = False
                 reports.append("Inspection could not complete. Review the local History entry; no viewer was exported.")
                 break
-            reports.append(name + ":\n" + "\n".join(block["text"] for block in result.get("content", []) if block.get("type") == "text"))
-        return ok, reports
+            blocks = [block["text"] for block in result.get("content", []) if block.get("type") == "text"]
+            reports.append(name + ":\n" + "\n".join(blocks))
+            if name == "inspect_input":
+                for block in blocks:
+                    try:
+                        parsed = json.loads(block)
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(parsed, dict) and isinstance(parsed.get("columns"), list):
+                        columns = parsed["columns"]
+        return ok, reports, columns
 
     def _seed_inspection(self):
         """Ground the model with a schema-only inspection of the selected dataset
@@ -246,12 +374,22 @@ class OfflineSession:
         self._seeded = True
         if not self._has_selected_dataset():
             return
-        ok, _ = self._run_inspection()
+        ok, _, columns = self._run_inspection()
+        if not ok:
+            self.messages.append({"role": "user", "content":
+                "Automatic inspection of the selected dataset failed. Tell the user and do not "
+                "claim any export or tool succeeded."})
+            return
         note = ("The selected dataset was inspected automatically above (schema only, no data "
                 "values). Use these results to plan; do not call inspect_input or "
-                "inspect_structure again for this dataset." if ok else
-                "Automatic inspection of the selected dataset failed. Tell the user and do not "
-                "claim any export or tool succeeded.")
+                "inspect_structure again for this dataset.")
+        candidates = propose_candidates(columns)
+        if candidates["section"] or candidates["annotation"]:
+            note += ("\nLocal candidate hints (ranked from the schema; confirm with the user, do not "
+                     "invent columns). Section/sample key: "
+                     + "; ".join(candidates["section"] or ["none obvious — ask the user"])
+                     + ". Main cell annotation: "
+                     + "; ".join(candidates["annotation"] or ["none obvious — ask the user"]) + ".")
         self.messages.append({"role": "user", "content": note})
 
     def inspect_selected(self):
@@ -261,7 +399,7 @@ class OfflineSession:
         else:
             commands.set_progress_sink(self.on_progress)
             try:
-                _, reports = self._run_inspection()
+                _, reports, _ = self._run_inspection()
             finally:
                 commands.set_progress_sink(None)
             self._seeded = True  # the model already holds this dataset's schema

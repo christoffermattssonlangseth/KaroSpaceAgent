@@ -28,11 +28,17 @@ def model_path(value=None):
         # tool loop on CPU; the 0.5B is a last resort — it tends to parrot the
         # few-shot and answer "Done." without ever calling a tool.
         bundled = ROOT / "output/offline-models"
-        candidates = [bundled / "qwen3-4b-instruct-2507-4bit",
-                      bundled / "qwen2.5-3b-instruct-4bit",
-                      bundled / "qwen2.5-0.5b-instruct-4bit"]
-        for name in ("Qwen3-4B-Instruct-2507-4bit", "Qwen2.5-3B-Instruct-4bit", "Qwen2.5-0.5B-Instruct-4bit"):
-            candidates.extend(sorted((cache / ("models--mlx-community--" + name) / "snapshots").glob("*")))
+        # Rank by capability first, location second: a cached 4B must beat a
+        # bundled 0.5B. Ordering all bundled paths ahead of the cache would let a
+        # stray bundled 0.5B win over a far more capable cached model — the exact
+        # "answers Done." failure this fallback exists to avoid.
+        tiers = (("qwen3-4b-instruct-2507-4bit", "Qwen3-4B-Instruct-2507-4bit"),
+                 ("qwen2.5-3b-instruct-4bit", "Qwen2.5-3B-Instruct-4bit"),
+                 ("qwen2.5-0.5b-instruct-4bit", "Qwen2.5-0.5B-Instruct-4bit"))
+        candidates = []
+        for bundled_name, cache_name in tiers:
+            candidates.append(bundled / bundled_name)
+            candidates.extend(sorted((cache / ("models--mlx-community--" + cache_name) / "snapshots").glob("*")))
         path = next((p for p in candidates if (p / "config.json").is_file()), None)
         if path is None:
             raise ValueError("Choose an already-downloaded MLX model with --local-model. Offline mode never downloads models.")

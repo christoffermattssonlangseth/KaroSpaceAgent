@@ -42,7 +42,12 @@ def main():
         # Exercise the real runtime and local tool with entirely synthetic input.
         from karospace_agent.privacy import Boundary
         boundary = Boundary()
-        if config["smoke_test"] != "tools":
+        full_window_test = config["smoke_test"] == "chat" and config["surface"] == "app"
+        if full_window_test:
+            print("Offline check: verifying the full chat window and background model worker.", flush=True)
+            from karospace_agent.offline_ui import run_app
+            run_app(config, smoke_test=True)
+        elif config["smoke_test"] != "tools":
             print("Offline check: network and filesystem confinement verified; loading local model.", flush=True)
             session = OfflineSession(config)
             print("Offline check: generating a synthetic CPU reply.", flush=True)
@@ -77,7 +82,7 @@ def main():
         inspected = commands.run_karospace([str(path), "--inspect-input"], timeout=120)
         if not inspected.ok:
             raise RuntimeError("Installed KaroSpace CLI failed inside isolation: " + inspected.stderr[-1500:])
-        if config["surface"] == "app":
+        if config["surface"] == "app" and not full_window_test:
             import tkinter as tk
             window = tk.Tk()
             window.withdraw()
@@ -86,7 +91,10 @@ def main():
         print(json.dumps({"offline_smoke_test": "passed", "local_model": config["smoke_test"] != "tools",
                           "local_tool": True, "network_denied": True, "filesystem_confined": True}))
         return 0
-    if config["surface"] == "app":
+    if config["surface"] == "worker":
+        from karospace_agent.offline_web_worker import run
+        run(config)
+    elif config["surface"] == "app":
         from karospace_agent.offline_ui import run_app
         run_app(config)
     else:

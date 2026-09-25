@@ -40,7 +40,7 @@ def runtime_path(value=None):
     return path.absolute()  # Keep a venv's executable path, not only its symlink target.
 
 
-def profile(read_roots, write_root, read_directories=()):
+def profile(read_roots, write_root, read_directories=(), probe_root=None):
     def quoted(path):
         value = str(Path(path).resolve())
         if "\0" in value:
@@ -53,6 +53,10 @@ def profile(read_roots, write_root, read_directories=()):
     rules.extend(f"(allow file-read-data (literal {quoted(p)}))" for p in read_directories)
     rules.extend(f"(allow file-read-data (subpath {quoted(p)}))" for p in sorted(set(map(str, read_roots))))
     rules.append(f"(allow file-read-data file-write* (subpath {quoted(write_root)}))")
+    if probe_root is not None:
+        # Only synthetic probe markers/socket live here. A short absolute path
+        # is required by macOS sockaddr_un, regardless of the user's home path.
+        rules.append(f"(allow file-read-data file-write* (subpath {quoted(probe_root)}))")
     # Native Tk only; no browser/WebKit, network services or launch services.
     rules.append("(allow mach-lookup " + " ".join(f"(global-name {json.dumps(s)})" for s in UI_SERVICES) + ")")
     rules.append('(allow file-read-data (literal "/dev/urandom") (literal "/dev/random"))')
@@ -128,16 +132,17 @@ def launch(*, surface="app", model=None, runtime=None, input_path=None, intent="
     print(f"Offline session files: {workspace}", flush=True)
     # The live outside listener and file are evidence for the actual process,
     # not an environment flag or a successful check in a different process.
-    with tempfile.TemporaryDirectory(prefix="karo-outside-", dir="/private/tmp") as outside:
+    with tempfile.TemporaryDirectory(prefix="karo-outside-", dir="/private/tmp") as outside, \
+            tempfile.TemporaryDirectory(prefix="karo-probe-", dir="/private/tmp") as probe:
         outside = Path(outside)
         (outside / "read-test").write_text("synthetic isolation test", encoding="utf-8")
         config["outside_probe"] = str(outside)
-        config["probe_directory"] = str(workspace / "tmp")
-        with isolation._unix_listener(workspace / "tmp"):
+        config["probe_directory"] = probe
+        with isolation._unix_listener(probe):
             config_path = workspace / "session.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
             config_path.chmod(0o600)
-            argv = [str(isolation.SANDBOX_EXEC), "-p", profile(roots, workspace, directories),
+            argv = [str(isolation.SANDBOX_EXEC), "-p", profile(roots, workspace, directories, probe_root=probe),
                     str(python), "-I", "-B", str(Path(__file__).with_name("offline_bootstrap.py")), str(config_path)]
             proc = subprocess.Popen(argv, env=env, cwd=workspace, start_new_session=True)
             try:

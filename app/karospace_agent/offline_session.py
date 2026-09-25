@@ -21,6 +21,21 @@ OFFLINE_TOOLS = frozenset({"inspect_input", "inspect_structure", "check_readines
     "run_companion", "run_export", "package_sidecar", "validate_output"})
 MAX_STEPS = 12
 
+OFFLINE_HELP = (
+    "I can help build a KaroSpace viewer from a local .h5ad or SpatialData .zarr, "
+    "or convert supported R objects first. Local tools can inspect dataset schema, "
+    "check readiness, filter QC, preprocess/cluster, add UMAP, split or merge sections, "
+    "run the companion pipeline, export a viewer, package sidecars, and validate outputs. "
+    "Some operations require their scientific dependencies to be installed.\n\n"
+    "To start, choose your dataset when opening the app, then ask me to inspect it. "
+    "Use /inspect for a schema inspection of the selected .h5ad/.zarr without model planning. "
+    "We need to review section, annotation and analysis choices before exporting. "
+    "Pasting a path does not grant access to an unselected file; reopen with Choose dataset if needed.\n\n"
+    "Everything runs locally with network access blocked. Online downloads and cloud models "
+    "are unavailable. The bundled small CPU model can make planning mistakes; tool results "
+    "and validation determine whether work succeeded. Use /tools to list the registered tools."
+)
+
 
 class LocalModel:
     def __init__(self, path):
@@ -97,9 +112,15 @@ class OfflineSession:
         self.specs = {s["name"]: s for s in tool_specs() if s["name"] in OFFLINE_TOOLS}
         # CPU inference benefits from progressive disclosure: only describe
         # tools being used, instead of repeatedly prefilling every schema.
-        catalog = sorted(self.specs)
+        catalog = {name: spec["description"].split(". ", 1)[0] for name, spec in sorted(self.specs.items())}
         prompt = (
             "You are KaroSpace's fully local assistant. All tools and inference run locally. "
+            "You CAN build KaroSpace spatial-transcriptomics viewers using the registered tools. "
+            "When asked what you can do or what skills you have, explain these capabilities. "
+            "For a viewer request without a dataset, ask the user to select a local dataset at app startup. "
+            "For a selected .h5ad/.zarr, begin with inspect_input, then inspect_structure. "
+            "For R objects, begin with rds_inspect and rds_convert. Review section and annotation choices "
+            "with the user, check_readiness, verify flags with cli_help, run_export, then validate_output. "
             "There is no internet, cloud model or download capability. Never claim a tool succeeded "
             "without a successful tool result. Ask about scientific choices; do not invent annotations "
             "or biological replicates. Inspect schema first. Use add_umap for analyzed data missing UMAP; "
@@ -118,15 +139,31 @@ class OfflineSession:
             # messages separate from tool calls without copying placeholders.
             {"role": "user", "content": "Say hello without using any tools."},
             {"role": "assistant", "content": '{"message":"Hello."}'},
+            {"role": "user", "content": "Can you make a KaroSpace viewer?"},
+            {"role": "assistant", "content": '{"message":"Yes. Choose a local dataset when opening the app. I can inspect its schema, help review export options, run the KaroSpace export and validate the output locally."}'},
         ]
         self.model = model_factory(config["model"])
 
     def send(self, text):
         # Clicking Send in this local-only surface authorizes local processing.
         # Still keep the same path/schema aliases and tool result filters.
+        # The web preview aliases slash commands as paths. Resolve locally only
+        # to recognize fixed commands, never to expose raw paths.
+        command = self.boundary.display(text).strip().lower()
         draft = self.boundary.preview(text)
         prepared = self.boundary.consume(self.boundary.approve(draft["draft_id"]))
         self.messages.append({"role": "user", "content": prepared})
+        if command.rstrip("?.!") in {"/help", "/tools", "what can you do", "what skills do you have", "can you make a karospace viewer"}:
+            self.messages[-1]["content"] = "/tools" if command == "/tools" else "/help"
+            answer = OFFLINE_HELP
+            if command == "/tools":
+                answer += "\n\nRegistered local tools:\n" + "\n".join(sorted(self.specs))
+            self.messages.append({"role": "assistant", "content": json.dumps({"message": answer})})
+            self.on_event(answer)
+            return answer
+        if command == "/inspect":
+            self.messages[-1]["content"] = "/inspect"
+            return self.inspect_selected()
         commands.set_progress_sink(self.on_progress)
         try:
             for _ in range(MAX_STEPS):
@@ -165,3 +202,30 @@ class OfflineSession:
             raise RuntimeError("The local model reached its tool-step limit. Review the local history before continuing.")
         finally:
             commands.set_progress_sink(None)
+
+    def inspect_selected(self):
+        """A deterministic read-only entry point for the small CPU model's UI."""
+        selected = self.config.get("input_path")
+        if not selected or Path(selected).suffix.lower() not in {".h5ad", ".zarr"}:
+            answer = "Reopen the app and choose a local .h5ad or .zarr dataset to use /inspect."
+        else:
+            arguments = {"input_path": self.boundary.register_path(selected), "spatialdata_table": ""}
+            reports = []
+            commands.set_progress_sink(self.on_progress)
+            try:
+                for name in ("inspect_input", "inspect_structure"):
+                    self.on_progress("status", f"Running {name} locally.\n")
+                    definition = next(t for t in tools.ALL_TOOLS if t.name == name)
+                    result = asyncio.run(self.boundary.invoke(definition, arguments))
+                    self.messages.append({"role": "user", "content": "Local tool result: " + json.dumps({"tool": name, **result})})
+                    if result.get("is_error"):
+                        reports.append("Inspection could not complete. Review the local History entry; no viewer was exported.")
+                        break
+                    reports.append(name + ":\n" + "\n".join(block["text"] for block in result.get("content", []) if block.get("type") == "text"))
+                answer = "\n\n".join(reports)
+            finally:
+                commands.set_progress_sink(None)
+        self.messages.append({"role": "assistant", "content": json.dumps({"message": answer})})
+        answer = self.boundary.display(answer)
+        self.on_event(answer)
+        return answer

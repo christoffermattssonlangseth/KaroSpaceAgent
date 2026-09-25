@@ -276,6 +276,19 @@ It also does not establish consent or make restricted data safe for cloud use.
 
 ### Offline chat (macOS Apple Silicon)
 
+For a double-clickable **KaroSpace Offline.app**, run from `app/`:
+
+```bash
+python packaging/build_offline_app.py
+open "dist/KaroSpace Offline.app"
+```
+
+The app offers **Choose dataset…** or **Start chat** and always uses offline
+mode. This local bundle refers to the existing checkout, runtime and model;
+keep those in place. It can be moved to Applications on this Mac, but is not
+a portable installer for another machine. See the
+[offline packaging instructions](packaging/README.md#offline-desktop-app).
+
 Use an already-downloaded MLX model and a Python environment with the `offline`
 extra installed. Dependency/model acquisition happens before a restricted-data
 session. Tk is required for the native window (included with many Python builds).

@@ -37,6 +37,8 @@ def local_preview(line, workspace):
 
 def opening(config):
     if config.get("input_path"):
+        if not config.get("intent") and Path(config["input_path"]).suffix.lower() in {".h5ad", ".zarr"}:
+            return "/inspect"
         return "Input file: " + config["input_path"] + "\n" + (config.get("intent") or "Inspect this dataset and help me build a viewer.")
     return config.get("intent", "")
 
@@ -60,7 +62,7 @@ def run_chat(config):
             session.send(text)
 
 
-def run_app(config):
+def run_app(config, *, smoke_test=False):
     import tkinter as tk
     from tkinter import ttk
     from tkinter.scrolledtext import ScrolledText
@@ -84,9 +86,12 @@ def run_app(config):
     events = queue.Queue(maxsize=1000)
     images = []
     state = {"session": None, "busy": True}
+    validation = {"sent": False, "reply": None, "complete": False}
 
     def close():
         window.destroy()
+        if smoke_test:
+            return  # An interrupted smoke test must not report success.
         # A native inference thread may be in C code. Exit the confined process
         # immediately; its launcher then terminates the whole scientific group.
         os._exit(0)
@@ -137,6 +142,7 @@ def run_app(config):
     append("Session files\n" + str(Path(config["workspace"])) +
            "\n\nThis window displays plain text only. It does not open external links or viewers.")
 
+
     def poll():
         for _ in range(100):
             try:
@@ -145,6 +151,7 @@ def run_app(config):
                 break
             if kind == "reply":
                 append("KaroSpace\n" + text)
+                validation["reply"] = text
             elif kind == "image":
                 try:
                     original = tk.PhotoImage(data=text)
@@ -166,12 +173,34 @@ def run_app(config):
                 state["busy"] = False
                 status.set("Stopped · No cloud fallback")
                 send_button.configure(state="normal" if state["session"] else "disabled")
+                if smoke_test:
+                    window.destroy()
+                    return
             else:
                 state["busy"] = False
                 status.set(text)
                 send_button.configure(state="normal")
+                if smoke_test:
+                    if not validation["sent"]:
+                        validation["sent"] = True
+                        composer.delete("1.0", "end")
+                        composer.insert("1.0", "Do not use tools. Reply with a message saying Ready.")
+                        send()
+                    else:
+                        validation["complete"] = True
+                        window.destroy()
+                        return
         window.after(100, poll)
 
     threading.Thread(target=work, daemon=True).start()
+    if smoke_test:
+        # Exercise the real widgets, background model initialization, Send
+        # handler, reply queue and close path, with a bounded synthetic request.
+        window.after(120000, window.destroy)
     poll()
     window.mainloop()
+    if smoke_test:
+        reply = validation["reply"]
+        if not validation["complete"] or not isinstance(reply, str) or reply.strip().lower().rstrip(".! ") != "ready":
+            raise RuntimeError("The full offline chat window did not complete its synthetic Ready request.")
+        print("Offline check: full chat window loaded its model and answered Ready.", flush=True)

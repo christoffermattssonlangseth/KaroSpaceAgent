@@ -1,10 +1,43 @@
 """Offline launch routing, credential isolation and the restricted local loop."""
 import json
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from karospace_agent import cli, commands, offline, offline_session, tools
+
+
+def test_long_home_directory_does_not_exceed_unix_socket_limit(tmp_path, monkeypatch):
+    home = tmp_path / ("synthetic-long-home-" * 5)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(offline.isolation, "isolated_command", lambda argv: argv)
+    monkeypatch.setattr(offline, "model_path", lambda _: tmp_path / "model")
+    calls = []
+
+    @contextmanager
+    def listener(directory):
+        socket_path = str(Path(directory) / "probe.sock")
+        assert len(socket_path.encode()) < 104
+        assert not Path(directory).is_relative_to(home)
+        yield
+
+    def popen(argv, **kwargs):
+        configuration = json.loads(Path(argv[-1]).read_text())
+        assert len(str(Path(configuration["workspace"]) / "tmp/probe.sock").encode()) >= 104
+        probe = configuration["probe_directory"]
+        assert f'(subpath "{probe}")' in argv[2]
+        assert "(deny network*)" in argv[2]
+        calls.append(configuration)
+        return SimpleNamespace(wait=lambda: 0, pid=123456789)
+
+    monkeypatch.setattr(offline.isolation, "_unix_listener", listener)
+    monkeypatch.setattr(offline.subprocess, "Popen", popen)
+    monkeypatch.setattr(offline.os, "killpg", lambda *args: (_ for _ in ()).throw(ProcessLookupError()))
+    assert offline.launch(surface="app") == 0
+    assert len(calls) == 1
+    assert not Path(calls[0]["probe_directory"]).exists()
 
 
 def config(tmp_path):
@@ -76,10 +109,75 @@ def test_unknown_and_online_tools_never_execute(tmp_path, monkeypatch):
 def test_tool_descriptions_are_disclosed_locally_on_demand(tmp_path):
     model = Model(['{"describe_tool":"add_umap"}', '{"describe_tool":"geo_build"}', '{"message":"Ready."}'])
     session = offline_session.OfflineSession(config(tmp_path), model_factory=lambda _: model, on_event=lambda _: None)
-    assert session.send("What can you do?") == "Ready."
+    assert session.send("Describe add_umap") == "Ready."
     assert '"properties"' not in session.messages[0]["content"]
     assert "representation" in model.requests[1]
     assert "tool_unavailable_offline" in model.requests[-1]
+
+
+@pytest.mark.parametrize("command", ["/help", "/tools", "what can you do?", "can you make a karospace viewer"])
+def test_offline_capabilities_do_not_depend_on_model_guessing(tmp_path, command):
+    model = Model([])
+    events = []
+    session = offline_session.OfflineSession(config(tmp_path), model_factory=lambda _: model, on_event=events.append)
+    answer = session.send(command)
+    assert "KaroSpace viewer" in answer
+    assert "network access blocked" in answer
+    assert not model.requests
+    assert events == [answer]
+    if command == "/tools":
+        assert "run_export" in answer
+        assert "geo_build" not in answer
+
+
+def test_offline_inspect_uses_selected_path_and_filters_before_model_context(tmp_path, monkeypatch):
+    model = Model([])
+    calls = []
+    selected = tmp_path / "selected.h5ad"
+    selected.touch()
+    async def inspect(args):
+        calls.append(args)
+        return {"_local": {"returncode": 0, "stdout": "Cells: 3\nAvailable cell metadata (adata.obs):\n  - PRIVATE_COLUMN [categorical; 2 values; 0 missing] examples: PRIVATE_VALUE\n"}}
+    async def structure(args):
+        calls.append(args)
+        return {"_local": {"returncode": 0, "stdout": "X: dtype=float32, format=dense, all_integer=yes\nobsm: (none)\nspatial_graph_present: no"}}
+    monkeypatch.setattr(tools.inspect_input, "handler", inspect)
+    monkeypatch.setattr(tools.inspect_structure, "handler", structure)
+    session = offline_session.OfflineSession(config(tmp_path) | {"input_path": str(selected)}, model_factory=lambda _: model, on_event=lambda _: None)
+    # Follow the web preview's aliasing, including slash-command path aliases.
+    draft = session.boundary.preview("/inspect")
+    prepared = session.boundary.consume(session.boundary.approve(draft["draft_id"]))
+    answer = session.send(prepared)
+    assert len(calls) == 2 and all(call["input_path"] == str(selected) for call in calls)
+    assert "PRIVATE_VALUE" not in answer
+    assert "PRIVATE_COLUMN" not in json.dumps(session.messages)
+    assert not model.requests
+
+
+def test_offline_inspect_without_selected_file_does_not_run_tools(tmp_path, monkeypatch):
+    monkeypatch.setattr(commands, "run", lambda *a, **kw: pytest.fail("no selected input"))
+    session = offline_session.OfflineSession(config(tmp_path), model_factory=lambda _: Model([]), on_event=lambda _: None)
+    assert "choose a local" in session.send("/inspect")
+
+
+def test_selected_dataset_opens_with_reliable_inspection():
+    from karospace_agent.offline_ui import opening
+    assert opening({"input_path": "/synthetic/input.h5ad", "intent": ""}) == "/inspect"
+    assert "Use these options" in opening({"input_path": "/synthetic/input.h5ad", "intent": "Use these options"})
+
+
+def test_offline_inspect_stops_after_failed_tool(tmp_path, monkeypatch):
+    selected = tmp_path / "selected.h5ad"
+    selected.touch()
+    async def failed(args):
+        return {"_local": {"returncode": 1, "stderr": "PRIVATE_FAILURE"}}
+    async def forbidden(args):
+        pytest.fail("second inspection must not run")
+    monkeypatch.setattr(tools.inspect_input, "handler", failed)
+    monkeypatch.setattr(tools.inspect_structure, "handler", forbidden)
+    session = offline_session.OfflineSession(config(tmp_path) | {"input_path": str(selected)}, model_factory=lambda _: Model([]), on_event=lambda _: None)
+    answer = session.send("/inspect")
+    assert "could not complete" in answer and "PRIVATE_FAILURE" not in answer
 
 
 def test_local_tool_results_still_cross_the_privacy_boundary(tmp_path, monkeypatch):

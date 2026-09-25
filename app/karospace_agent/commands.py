@@ -522,13 +522,15 @@ def run_preprocess(
     n_pcs: int = 50,
     n_hvg: int = 2000,
     key: str = "leiden",
+    compute_umap: bool = True,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> RunResult:
     """Run scripts/preprocess.py — add a leiden clustering to a raw .h5ad.
 
     Uses the karospace scientific interpreter (needs scanpy/leidenalg). Long
     enough to stream progress like an export; the model still receives only the
-    captured, truncated aggregate log (cluster count + sizes, key names).
+    captured, truncated aggregate log (cluster count + sizes, key names). Also
+    writes a 2D obsm['X_umap'] when the input lacks one, unless compute_umap=False.
     """
     if not PREPROCESS_SCRIPT.exists():
         return RunResult(127, "", f"preprocess script missing: {PREPROCESS_SCRIPT}")
@@ -541,6 +543,8 @@ def run_preprocess(
         "--n-hvg", str(n_hvg),
         "--key", key,
     ]
+    if not compute_umap:
+        argv.append("--no-umap")
     return run(argv, timeout=timeout)
 
 

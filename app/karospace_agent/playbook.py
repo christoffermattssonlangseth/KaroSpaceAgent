@@ -58,7 +58,7 @@ Inspect  — inspect_input     sanitized obs/feature metadata for a file. ALWAYS
            check_readiness   local counts/coordinates/section validation and memory/disk estimates before heavy work.
            cli_help          verify a flag exists before using it. Never invent flags.
 Prepare  — qc_filter        drop low-quality cells (min_counts / min_genes) from a raw matrix before enrich/export.
-           run_preprocess    add a leiden clustering when a raw file has no annotations (writes obs['leiden']).
+           run_preprocess    add a leiden clustering + 2D obsm['X_umap'] when a raw file lacks them (existing embeddings kept).
            generate_notebook  hand off heavier prep (CellCharter spatial domains) as a notebook the researcher runs.
            merge_sections    merge per-section files that lack sample metadata.
            split_sections    split multiple tissue pieces sharing one sample_id into per-piece sections (spatial gaps).
@@ -242,10 +242,20 @@ celltype / annotation column and no clustering (leiden/louvain/…) — the file
 carries only raw counts and coordinates (a fresh geo_build file is the usual
 case). A viewer built from it could be coloured gene-by-gene only, with nothing
 for --main-cell-annotation. Create a clustering first: call run_preprocess on the
-file (it runs scanpy normalize → log1p → HVG → PCA → neighbors → leiden LOCALLY),
-which writes obs['leiden'], a raw layers['counts'], and a log1p
-layers['normalized']. Use the leiden column as --main-cell-annotation in §2 and
-point display normalization at layers['normalized'] in §3. Resolution is a
+file (it runs scanpy normalize → log1p → HVG → PCA → neighbors → UMAP → leiden
+LOCALLY), which writes obs['leiden'], a raw layers['counts'], a log1p
+layers['normalized'], and a 2D obsm['X_umap']. Use the leiden column as
+--main-cell-annotation in §2 and point display normalization at
+layers['normalized'] in §3.
+
+The same run also fills a missing UMAP: the viewer auto-detects obsm['X_umap']
+for a non-spatial scatter, so when inspect_structure lists no embedding with a
+'umap' role hint, run_preprocess adds one (it reuses the neighbours graph it
+already builds). An embedding the input already carries — e.g. an author's UMAP
+from an .rds — is kept, never overwritten. If a file is ALREADY annotated but
+just lacks a UMAP, run_preprocess still adds obsm['X_umap'] (the leiden column it
+also writes can simply go unused); use --no-umap / compute_umap=false only to skip
+the embedding deliberately. Resolution is a
 scientific choice, not a fact: run_preprocess uses a default (1.0) and reports the
 cluster count — if the user wants finer/coarser structure, re-run at a different
 resolution rather than treating the first pass as ground truth. Skip this step

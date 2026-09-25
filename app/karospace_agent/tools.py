@@ -10,11 +10,12 @@ is the whole of what Claude can do.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from . import commands
+from . import commands, preflight
 from .sanitize import stat_paths, strip_inspect_examples, truncate
 
 SERVER_NAME = "karospace"
@@ -41,6 +42,11 @@ def _report(rr: commands.RunResult, label: str) -> dict[str, Any]:
     result["_local"] = {"returncode": rr.returncode, "stdout": rr.stdout,
                         "stderr": rr.stderr, "timed_out": rr.timed_out}
     return result
+
+
+async def _ready(name, args):
+    blocked = await asyncio.to_thread(preflight.check, name, args)
+    return _report(blocked, "local readiness check") if blocked is not None else None
 
 
 # --- Inspection -----------------------------------------------------------
@@ -113,14 +119,21 @@ async def inspect_structure(args: dict[str, Any]) -> dict[str, Any]:
      "section_key": Annotated[str, "Section column alias, or empty if not yet selected."],
      "coords_key": Annotated[str, "Spatial embedding alias; default spatial."],
      "counts_layer": Annotated[str, "Raw-count layer alias, or empty to check X."],
-     "require_counts": Annotated[bool, "True before raw-count QC or clustering."],
+     "require_counts": Annotated[bool, "True when this operation requires raw counts."],
+     "require_spatial": Annotated[bool, "False for QC, clustering or embedding alone; true for spatial operations."],
+     "spatial_x": Annotated[str, "Export coordinate obs column alias, or empty to use obsm."],
+     "spatial_y": Annotated[str, "Export coordinate obs column alias, paired with spatial_x."],
+     "coordinate_mode": Annotated[str, "Coordinate fallback rules: strict (default), export, or companion."],
      "table": Annotated[str, "SpatialData table alias, or empty for a single table." ]},
 )
 async def check_readiness(args: dict[str, Any]) -> dict[str, Any]:
     rr = commands.run_readiness(
         args["input_path"], args["output_dir"], args.get("section_key", ""),
         args.get("coords_key") or "spatial", args.get("counts_layer", ""),
-        bool(args.get("require_counts", False)), args.get("table", ""))
+        bool(args.get("require_counts", False)), args.get("table", ""),
+        require_spatial=args.get("require_spatial", True),
+        spatial_x=args.get("spatial_x", ""), spatial_y=args.get("spatial_y", ""),
+        coordinate_mode=args.get("coordinate_mode") or "strict")
     return _report(rr, "local dataset readiness check")
 
 
@@ -411,6 +424,8 @@ async def ingest_spatial(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def qc_filter(args: dict[str, Any]) -> dict[str, Any]:
+    if blocked := await _ready("qc_filter", args):
+        return blocked
     rr = commands.run_qc_filter(
         str(args["input_path"]),
         str(args["output"]),
@@ -430,8 +445,8 @@ async def qc_filter(args: dict[str, Any]) -> dict[str, Any]:
     "preserved), layers['normalized'] (log1p, colour from this), obs['leiden'] "
     "(feeds --main-cell-annotation / --cell-annotations), and a 2D obsm['X_umap'] "
     "the viewer auto-detects (added only when the input has no UMAP; an existing "
-    "one is kept). Call it when inspect shows no analysis-derived annotation column "
-    "or no embedding with a 'umap' role hint. Returns an aggregate log only "
+    "one is kept). Call it when inspect shows no analysis-derived annotation column. "
+    "For annotated data missing UMAP, use add_umap to preserve existing analysis. Returns an aggregate log only "
     "(cluster count + per-cluster sizes, key names) — no per-cell labels or "
     "values. Resolution is a scientific choice: the default is a starting point; "
     "re-run with a different resolution if the user wants finer/coarser clusters. "
@@ -447,6 +462,8 @@ async def qc_filter(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def run_preprocess(args: dict[str, Any]) -> dict[str, Any]:
+    if blocked := await _ready("run_preprocess", args):
+        return blocked
     resolution = float(args.get("resolution") or 1.0)
     key = (args.get("key") or "leiden").strip() or "leiden"
     rr = commands.run_preprocess(
@@ -456,6 +473,31 @@ async def run_preprocess(args: dict[str, Any]) -> dict[str, Any]:
         key=key,
     )
     return _report(rr, f"preprocess.py {args['input_path']} --resolution {resolution}")
+
+
+@tool(
+    "add_umap",
+    "Add only a 2D X_umap to an analyzed .h5ad using an existing obsm representation "
+    "(PCA or another latent embedding selected from inspect_structure). Preserves "
+    "expression, layers, clusters, graphs, metadata and all existing embeddings. "
+    "An existing X_umap is preserved; an existing umap is copied to X_umap. "
+    "Requires a new output file. Runs locally; no coordinates or labels are returned. "
+    "Choose the representation with the researcher; never re-cluster just to add UMAP.",
+    {"input_path": Annotated[str, "Input analyzed .h5ad."],
+     "output": Annotated[str, "New output .h5ad, must not exist."],
+     "representation": Annotated[str, "Existing obsm representation alias; default X_pca."],
+     "n_neighbors": Annotated[int, "UMAP neighbors, at least 2; default 15."],
+     "min_dist": Annotated[float, "UMAP minimum distance, 0 to 1; default 0.5."],
+     "random_state": Annotated[int, "Reproducible random seed; default 0."]},
+)
+async def add_umap(args: dict[str, Any]) -> dict[str, Any]:
+    if blocked := await _ready("add_umap", args):
+        return blocked
+    rr = commands.run_add_umap(
+        args["input_path"], args["output"], representation=args.get("representation") or "X_pca",
+        n_neighbors=args.get("n_neighbors", 15), min_dist=args.get("min_dist", 0.5),
+        random_state=args.get("random_state", 0))
+    return _report(rr, "local embedding-only UMAP")
 
 
 @tool(
@@ -494,6 +536,8 @@ async def run_preprocess(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def split_sections(args: dict[str, Any]) -> dict[str, Any]:
+    if blocked := await _ready("split_sections", args):
+        return blocked
     method = (args.get("method") or "auto").strip() or "auto"
     key = (args.get("key") or "section").strip() or "section"
     coords_key = (args.get("coords_key") or "spatial").strip() or "spatial"
@@ -540,6 +584,8 @@ async def split_sections(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def preview_sections(args: dict[str, Any]) -> dict[str, Any]:
+    if blocked := await _ready("preview_sections", args):
+        return blocked
     method = (args.get("method") or "auto").strip() or "auto"
     coords_key = (args.get("coords_key") or "spatial").strip() or "spatial"
     rr = commands.run_preview_sections(
@@ -625,6 +671,8 @@ async def merge_sections(args: dict[str, Any]) -> dict[str, Any]:
     {"args": Annotated[list, "Argument tokens passed straight to the binary."]},
 )
 async def run_companion(args: dict[str, Any]) -> dict[str, Any]:
+    if blocked := await _ready("run_companion", args):
+        return blocked
     tokens = [str(a) for a in args["args"]]
     rr = commands.run_companion(tokens)
     return _report(rr, f"karospace-companion {' '.join(tokens)}")
@@ -656,6 +704,8 @@ async def run_export(args: dict[str, Any]) -> dict[str, Any]:
     check = commands.check_pseudobulk(args["input_path"], flags)
     if check is not None and not check.ok:
         return _report(check, "local pseudobulk replicate check")
+    if blocked := await _ready("run_export", args):
+        return blocked
     argv = [args["input_path"], "-o", args["output"], *flags]
     rr = commands.run_karospace(argv)
     return _report(rr, f"karospace {' '.join(argv)}")
@@ -710,6 +760,7 @@ ALL_TOOLS = [
     ingest_spatial,
     qc_filter,
     run_preprocess,
+    add_umap,
     split_sections,
     preview_sections,
     generate_notebook,

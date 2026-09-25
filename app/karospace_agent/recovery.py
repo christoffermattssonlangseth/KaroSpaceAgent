@@ -12,7 +12,7 @@ from pathlib import Path
 import uuid
 
 
-OUTPUT_TOOLS = {"qc_filter", "run_preprocess", "split_sections", "generate_notebook",
+OUTPUT_TOOLS = {"qc_filter", "run_preprocess", "add_umap", "split_sections", "generate_notebook",
                 "rds_convert", "geo_build", "ingest_spatial", "merge_sections", "run_export"}
 RECOVERABLE = OUTPUT_TOOLS | {"run_companion"}
 
@@ -136,7 +136,8 @@ def prepare(boundary, record):
         if not matches(checkpoints[0]) or checkpoints[0]["size_bytes"] == 0:
             raise RecoveryError("checkpoint_changed_or_unverified")
         from . import commands
-        checked = commands.run_readiness(checkpoints[0]["path"], str(boundary.output_root))
+        checked = commands.run_readiness(checkpoints[0]["path"], str(boundary.output_root),
+                                         require_spatial=name not in {"qc_filter", "run_preprocess", "add_umap"})
         match = re.search(r"(?m)^READINESS_JSON (\{.*\})$", checked.stdout)
         if not checked.ok or not match or json.loads(match[1]).get("ready") is not True:
             raise RecoveryError("checkpoint_not_ready")

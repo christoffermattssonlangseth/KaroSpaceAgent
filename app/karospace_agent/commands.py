@@ -29,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MERGE_SCRIPT = REPO_ROOT / "scripts" / "merge_sections.py"
 STRUCTURE_SCRIPT = REPO_ROOT / "scripts" / "inspect_structure.py"
 READINESS_SCRIPT = REPO_ROOT / "scripts" / "check_readiness.py"
+ADD_UMAP_SCRIPT = REPO_ROOT / "scripts" / "add_umap.py"
 GEO_SCRIPT = REPO_ROOT / "scripts" / "geo_fetch.py"
 PREPROCESS_SCRIPT = REPO_ROOT / "scripts" / "preprocess.py"
 SPLIT_SECTIONS_SCRIPT = REPO_ROOT / "scripts" / "split_sections.py"
@@ -435,12 +436,17 @@ def run_structure(input_path: str, table: str = "", timeout: int = 600) -> RunRe
 
 
 def run_readiness(input_path, output_dir, section_key="", coords_key="spatial",
-                  counts_layer="", require_counts=False, table=""):
+                  counts_layer="", require_counts=False, table="", *,
+                  require_spatial=True, spatial_x="", spatial_y="", coordinate_mode="strict"):
     argv = [merge_python(), str(READINESS_SCRIPT), input_path, "--output-dir", output_dir,
             "--section-key", section_key, "--coords-key", coords_key,
-            "--counts-layer", counts_layer, "--table", table]
+            "--counts-layer", counts_layer, "--table", table,
+            "--spatial-x", spatial_x, "--spatial-y", spatial_y,
+            "--coordinate-mode", coordinate_mode]
     if require_counts:
         argv.append("--require-counts")
+    if not require_spatial:
+        argv.append("--no-spatial")
     return run(argv, timeout=600, stream=False)
 
 
@@ -546,6 +552,14 @@ def run_preprocess(
     if not compute_umap:
         argv.append("--no-umap")
     return run(argv, timeout=timeout)
+
+
+def run_add_umap(input_path, output, representation="X_pca", n_neighbors=15,
+                 min_dist=0.5, random_state=0, timeout=DEFAULT_TIMEOUT):
+    """Compute only UMAP from an existing representation, preserving analysis."""
+    return run([merge_python(), str(ADD_UMAP_SCRIPT), input_path, "-o", output,
+                "--representation", representation, "--n-neighbors", str(n_neighbors),
+                "--min-dist", str(min_dist), "--random-state", str(random_state)], timeout=timeout)
 
 
 def flag_value(flags: list[str], flag: str, default=None):

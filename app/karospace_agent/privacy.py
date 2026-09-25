@@ -236,6 +236,14 @@ class Boundary:
         code = info.get("returncode", 1 if raw.get("is_error") else 0)
         stdout = info.get("stdout", "")
         if code or raw.get("is_error"):
+            if info.get("stderr") == "readiness_blocked":
+                checked = self._filter("check_readiness", {}, {}, {"_local": {
+                    "returncode": 0, "stdout": stdout}})
+                report = json.loads(checked["content"][0]["text"])
+                if report["ready"]:
+                    raise ValueError("inconsistent readiness block")
+                return result({"status": "error", "diagnostic": "readiness_blocked",
+                               "errors": report["errors"], "warnings": report["warnings"]}, True)
             text = (stdout + "\n" + info.get("stderr", "")).lower()
             diagnostic = "operation_failed"
             for needle, fixed in (
@@ -260,6 +268,16 @@ class Boundary:
                 ("qc_counts_required", "qc_counts_required"),
                 ("qc_output_same_as_input", "qc_output_same_as_input"),
                 ("qc_output_exists", "qc_output_exists"),
+                ("readiness_arguments_unsupported", "readiness_arguments_unsupported"),
+                ("readiness_explicit_output_required", "readiness_explicit_output_required"),
+                ("readiness_conflicting_output", "readiness_conflicting_output"),
+                ("readiness_check_unavailable", "readiness_check_unavailable"),
+                ("embedding_output_exists", "embedding_output_exists"),
+                ("embedding_input_unsupported", "embedding_input_unsupported"),
+                ("embedding_parameters_invalid", "embedding_parameters_invalid"),
+                ("embedding_representation_invalid", "embedding_representation_invalid"),
+                ("embedding_representation_missing", "embedding_representation_missing"),
+                ("embedding_too_few_cells", "embedding_too_few_cells"),
             ):
                 if needle in text:
                     diagnostic = fixed

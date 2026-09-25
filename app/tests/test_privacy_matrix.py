@@ -47,7 +47,7 @@ SUCCESS = {
                              "method": "auto", "key": PRIVATE, "groups": [{"pieces": 1, "sizes": [5]}]}),
     "preview_sections": marked("PREVIEW_SECTIONS_JSON", {"n_groups": 1, "n_panels": 1,
                                "method": "auto", "groups": [{"pieces": 1}]}),
-    **{name: PRIVATE for name in ("geo_build", "run_preprocess", "generate_notebook", "merge_sections",
+    **{name: PRIVATE for name in ("geo_build", "run_preprocess", "add_umap", "generate_notebook", "merge_sections",
                                   "run_companion", "run_export", "package_sidecar", "validate_output")},
 }
 

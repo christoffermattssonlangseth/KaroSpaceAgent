@@ -172,7 +172,7 @@ default and no auth: it is a local app with a browser window, not a service.
 | `agent.py` | Provider selection and Claude options/session; one-shot builds. |
 | `codex.py` | Codex app-server connection, conversation state, tool dispatch and interruption. |
 | `tool_worker.py` | Validates and executes one existing tool in a cancellable local worker; the parent filters reports before they reach Codex. |
-| `mcp.py` | Serves the same 21 sanitizing tools over stdio for Codex and other MCP clients; no model session or Claude authentication. |
+| `mcp.py` | Serves the same 22 sanitizing tools over stdio for Codex and other MCP clients; no model session or Claude authentication. |
 | `auth.py` | Detects which credential the CLI subprocess will use and whether it is permitted; no secret is read. |
 | `cli.py` | `karospace-agent build <input> "<intent>"`, `karospace-agent chat [input] ["<intent>"]` (the REPL), `karospace-agent web`, and `karospace-agent auth`. |
 | `web.py` | The browser front end: Starlette app, SSE event hub, one-turn-at-a-time worker (optional `[web]` extra). |
@@ -255,12 +255,34 @@ requested. Multi-table SpatialData requires an explicit table selection. Its
 response contains only fixed diagnostic codes, booleans and aggregate counts;
 no identifiers or values are returned.
 
-The playbook calls this tool before QC, clustering, companion processing and
-export. `ready=false` means resolve the reported errors first. Memory/disk
-estimates are conservative guidance, not guarantees for every algorithm; warnings
+The registered QC, clustering, UMAP, section splitting/preview, companion and
+export tools enforce a fresh check before processing, across Claude, Codex and
+stdio MCP. Errors block execution; there is no model-controlled bypass. QC
+requires raw counts in X. QC, clustering and UMAP do not require spatial
+coordinates. Spatial operations check their selected coordinate and section
+keys; export can also use numeric obs columns for coordinates. Companion requires
+`prepare` with an explicit `--output`. Run `check_readiness` separately to diagnose
+problems early (`require_spatial=false` for nonspatial operations).
+Use `coordinate_mode=export` or `companion` to match those readers' coordinate
+fallbacks. Export checks `sample_id` when no `--section-key` is supplied; choose
+an explicit section column or an empty value for a single section. Multi-table
+SpatialData and missing section columns need explicit choices at this boundary.
+
+Memory/disk estimates are advisory guidance, not guarantees for every algorithm; warnings
 need review. The tool tests output writability and reports available resources.
 It is a workflow check, not an operating-system memory limit. Raw-count validation
 does not establish provenance or prove that integer-valued data was never normalized.
+It also does not establish consent or make restricted data safe for cloud use.
+
+### Adding UMAP to an analyzed dataset
+
+`add_umap` writes a new `.h5ad` with a 2D `X_umap` using an existing PCA or latent
+representation selected from `inspect_structure` (default `X_pca`). It preserves
+expression, layers, annotations, graphs, metadata and existing embeddings. An
+existing `X_umap` is kept; an existing `umap` is copied to the standard key. If
+there is no suitable representation, choose an analysis with the researcher.
+Use `run_preprocess` when clustering is intended, rather than just to add UMAP.
+The new step uses the same local history and recovery support as preprocessing.
 
 ### Recovering after an interruption
 

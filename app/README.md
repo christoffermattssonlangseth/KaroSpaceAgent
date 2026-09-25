@@ -300,15 +300,31 @@ karospace-agent app /path/to/input.h5ad --offline --local-model /path/to/local-m
 
 `chat --offline` provides the terminal equivalent. `--offline-python /path/to/python`
 selects a separate runtime. In a source checkout, `.venv-offline/bin/python` is
-used if present. If `--local-model` is omitted, the app looks for an existing
-`output/offline-models/qwen2.5-0.5b-instruct-4bit` directory in the checkout,
-then a cached `mlx-community/Qwen2.5-0.5B-Instruct-4bit` snapshot, then the larger
-cached `mlx-community/Qwen3-4B-Instruct-2507-4bit`. It never downloads a model.
-The small model uses less CPU; larger models generally reason better but can
-take several minutes per turn in this CPU-only mode.
+used if present. If `--local-model` is omitted, the app prefers the most capable
+already-downloaded model, checking in order: an `output/offline-models/`
+directory in the checkout (`qwen3-4b-instruct-2507-4bit`, then
+`qwen2.5-3b-instruct-4bit`, then `qwen2.5-0.5b-instruct-4bit`), then a cached
+`mlx-community/Qwen3-4B-Instruct-2507-4bit` snapshot, then `Qwen2.5-3B-Instruct-4bit`,
+then `Qwen2.5-0.5B-Instruct-4bit`. It never downloads a model.
+
+**Model choice matters a lot here.** A ~3–4B instruct model (e.g.
+`mlx-community/Qwen3-4B-Instruct-2507-4bit`) reliably drives the JSON tool loop;
+a 0.5B model tends to parrot its prompt and answer "Done." without ever calling a
+tool. Download one on a networked machine first, then run offline:
+
+```bash
+huggingface-cli download mlx-community/Qwen3-4B-Instruct-2507-4bit
+```
+
+Larger models reason better but can take several minutes per turn in this
+CPU-only mode; the 0.5B uses less CPU and is a last-resort fallback only.
 Small models (up to roughly 600 million parameters) are expanded in memory
 to use faster CPU matrix operations. Allow about 1–2 GB for their weights,
 plus runtime/context memory. Larger models keep their quantized weights.
+
+When a dataset is selected, the app inspects its schema automatically (schema
+only, no data values) before the model's first reply, so even a weaker local
+model starts grounded instead of guessing whether a file is present.
 
 This launches a native plain-text window with an in-process CPU model. The OS
 blocks network access for the app and its child processes, including connections

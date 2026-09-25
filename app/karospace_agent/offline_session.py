@@ -27,13 +27,15 @@ OFFLINE_HELP = (
     "check readiness, filter QC, preprocess/cluster, add UMAP, split or merge sections, "
     "run the companion pipeline, export a viewer, package sidecars, and validate outputs. "
     "Some operations require their scientific dependencies to be installed.\n\n"
-    "To start, choose your dataset when opening the app, then ask me to inspect it. "
-    "Use /inspect for a schema inspection of the selected .h5ad/.zarr without model planning. "
-    "We need to review section, annotation and analysis choices before exporting. "
+    "To start, choose your dataset when opening the app: I inspect its schema automatically "
+    "before my first reply, so you can go straight to reviewing section, annotation and analysis "
+    "choices before exporting. Use /inspect any time to re-run that schema inspection of the "
+    "selected .h5ad/.zarr without model planning. "
     "Pasting a path does not grant access to an unselected file; reopen with Choose dataset if needed.\n\n"
     "Everything runs locally with network access blocked. Online downloads and cloud models "
-    "are unavailable. The bundled small CPU model can make planning mistakes; tool results "
-    "and validation determine whether work succeeded. Use /tools to list the registered tools."
+    "are unavailable. A small CPU model can make planning mistakes; tool results and validation "
+    "determine whether work succeeded. A larger local model (about 3-4B) is far more reliable "
+    "than a 0.5B — see the README to install one. Use /tools to list the registered tools."
 )
 
 
@@ -121,6 +123,8 @@ class OfflineSession:
             "For a selected .h5ad/.zarr, begin with inspect_input, then inspect_structure. "
             "For R objects, begin with rds_inspect and rds_convert. Review section and annotation choices "
             "with the user, check_readiness, verify flags with cli_help, run_export, then validate_output. "
+            "If the selected dataset was already inspected (results appear above), use them and do not "
+            "call inspect_input or inspect_structure again for it. "
             "There is no internet, cloud model or download capability. Never claim a tool succeeded "
             "without a successful tool result. Ask about scientific choices; do not invent annotations "
             "or biological replicates. Inspect schema first. Use add_umap for analyzed data missing UMAP; "
@@ -142,6 +146,10 @@ class OfflineSession:
             {"role": "user", "content": "Can you make a KaroSpace viewer?"},
             {"role": "assistant", "content": '{"message":"Yes. Choose a local dataset when opening the app. I can inspect its schema, help review export options, run the KaroSpace export and validate the output locally."}'},
         ]
+        # A selected dataset is inspected once, deterministically, before the
+        # model's first planning turn (see _seed_inspection). This flag keeps it
+        # from being re-inspected on later turns or after an explicit /inspect.
+        self._seeded = False
         self.model = model_factory(config["model"])
 
     def send(self, text):
@@ -166,6 +174,7 @@ class OfflineSession:
             return self.inspect_selected()
         commands.set_progress_sink(self.on_progress)
         try:
+            self._seed_inspection()
             for _ in range(MAX_STEPS):
                 raw = self.model.complete(self.messages)
                 self.messages.append({"role": "assistant", "content": raw})
@@ -203,28 +212,60 @@ class OfflineSession:
         finally:
             commands.set_progress_sink(None)
 
+    def _has_selected_dataset(self):
+        selected = self.config.get("input_path")
+        return bool(selected) and Path(selected).suffix.lower() in {".h5ad", ".zarr"}
+
+    def _run_inspection(self):
+        """Run the two schema-only inspections on the selected dataset, appending
+        each filtered result to the local message history. Returns (ok, reports)
+        with display-safe text blocks. The caller owns the progress sink and marks
+        the session seeded; only aggregate schema — never data values — is kept."""
+        arguments = {"input_path": self.boundary.register_path(self.config["input_path"]), "spatialdata_table": ""}
+        reports, ok = [], True
+        for name in ("inspect_input", "inspect_structure"):
+            self.on_progress("status", f"Running {name} locally.\n")
+            definition = next(t for t in tools.ALL_TOOLS if t.name == name)
+            result = asyncio.run(self.boundary.invoke(definition, arguments))
+            self.messages.append({"role": "user", "content": "Local tool result: " + json.dumps({"tool": name, **result})})
+            if result.get("is_error"):
+                ok = False
+                reports.append("Inspection could not complete. Review the local History entry; no viewer was exported.")
+                break
+            reports.append(name + ":\n" + "\n".join(block["text"] for block in result.get("content", []) if block.get("type") == "text"))
+        return ok, reports
+
+    def _seed_inspection(self):
+        """Ground the model with a schema-only inspection of the selected dataset
+        before its first planning turn. A small local model then never has to
+        discover a file is present or call inspect_input itself — the failure mode
+        where it just answers "Done." without doing any work. Runs at most once;
+        the caller (send) already holds the progress sink."""
+        if self._seeded:
+            return
+        self._seeded = True
+        if not self._has_selected_dataset():
+            return
+        ok, _ = self._run_inspection()
+        note = ("The selected dataset was inspected automatically above (schema only, no data "
+                "values). Use these results to plan; do not call inspect_input or "
+                "inspect_structure again for this dataset." if ok else
+                "Automatic inspection of the selected dataset failed. Tell the user and do not "
+                "claim any export or tool succeeded.")
+        self.messages.append({"role": "user", "content": note})
+
     def inspect_selected(self):
         """A deterministic read-only entry point for the small CPU model's UI."""
-        selected = self.config.get("input_path")
-        if not selected or Path(selected).suffix.lower() not in {".h5ad", ".zarr"}:
+        if not self._has_selected_dataset():
             answer = "Reopen the app and choose a local .h5ad or .zarr dataset to use /inspect."
         else:
-            arguments = {"input_path": self.boundary.register_path(selected), "spatialdata_table": ""}
-            reports = []
             commands.set_progress_sink(self.on_progress)
             try:
-                for name in ("inspect_input", "inspect_structure"):
-                    self.on_progress("status", f"Running {name} locally.\n")
-                    definition = next(t for t in tools.ALL_TOOLS if t.name == name)
-                    result = asyncio.run(self.boundary.invoke(definition, arguments))
-                    self.messages.append({"role": "user", "content": "Local tool result: " + json.dumps({"tool": name, **result})})
-                    if result.get("is_error"):
-                        reports.append("Inspection could not complete. Review the local History entry; no viewer was exported.")
-                        break
-                    reports.append(name + ":\n" + "\n".join(block["text"] for block in result.get("content", []) if block.get("type") == "text"))
-                answer = "\n\n".join(reports)
+                _, reports = self._run_inspection()
             finally:
                 commands.set_progress_sink(None)
+            self._seeded = True  # the model already holds this dataset's schema
+            answer = "\n\n".join(reports)
         self.messages.append({"role": "assistant", "content": json.dumps({"message": answer})})
         answer = self.boundary.display(answer)
         self.on_event(answer)

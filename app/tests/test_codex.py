@@ -39,7 +39,7 @@ for line in sys.stdin:
     elif method == 'thread/start':
         assert params['environments'] == []
         assert params['ephemeral'] is True
-        assert len(params['dynamicTools']) == 21
+        assert len(params['dynamicTools']) == 22
         assert params['modelProvider'] == 'openai'
         environments = [{}] if os.environ.get('FAKE_CODEX_ENVIRONMENT') == '1' else []
         emit({'id': ident, 'result': {'thread': {'id': 'thread-1', 'environments': environments}}})
@@ -166,7 +166,21 @@ def test_refuses_a_thread_with_execution_access(fake_codex, monkeypatch):
     asyncio.run(asyncio.wait_for(exercise(), 15))
 
 
-def test_worker_preserves_sanitization_and_local_progress(tmp_path, monkeypatch):
+@pytest.fixture
+def worker_dataset(tmp_path, monkeypatch):
+    import sys
+    ad = pytest.importorskip("anndata")
+    np = pytest.importorskip("numpy")
+    path = tmp_path / "test.h5ad"
+    data = ad.AnnData(np.ones((3, 2), dtype=np.float32))
+    data.obs["sample_id"] = ["synthetic"] * 3
+    data.obsm["spatial"] = np.zeros((3, 2))
+    data.write_h5ad(path)
+    monkeypatch.setenv("KAROSPACE_MERGE_PYTHON", sys.executable)
+    return str(path)
+
+
+def test_worker_preserves_sanitization_and_local_progress(tmp_path, monkeypatch, worker_dataset):
     binary = tmp_path / "karospace"
     binary.write_text('''#!/usr/bin/env python3
 import sys
@@ -187,7 +201,7 @@ else:
             assert "categorical; 2 values" in json.dumps(result)
             assert progress == []
             result = await session._run_tool("run_export", {
-                "input_path": "test.h5ad", "output": "out.html", "flags": [],
+                "input_path": worker_dataset, "output": str(tmp_path / "out.html"), "flags": [],
             })
             assert not result["is_error"]
             assert any("local export progress" in line for _, line in progress)
@@ -196,7 +210,7 @@ else:
     asyncio.run(asyncio.wait_for(exercise(), 15))
 
 
-def test_worker_cancellation_stops_child_before_it_writes(tmp_path, monkeypatch):
+def test_worker_cancellation_stops_child_before_it_writes(tmp_path, monkeypatch, worker_dataset):
     marker = tmp_path / "should-not-exist"
     started = tmp_path / "started"
     binary = tmp_path / "slow-karospace"
@@ -210,7 +224,7 @@ def test_worker_cancellation_stops_child_before_it_writes(tmp_path, monkeypatch)
     async def exercise():
         async with codex.Session() as session:
             task = asyncio.create_task(session._run_tool("run_export", {
-                "input_path": "x", "output": "out", "flags": [],
+                "input_path": worker_dataset, "output": str(tmp_path / "out.html"), "flags": [],
             }))
             while not started.exists():
                 await asyncio.sleep(.01)
@@ -220,6 +234,28 @@ def test_worker_cancellation_stops_child_before_it_writes(tmp_path, monkeypatch)
             await asyncio.sleep(2.1)
             assert not marker.exists()
     asyncio.run(asyncio.wait_for(exercise(), 10))
+
+
+def test_worker_blocks_invalid_dataset_before_export(tmp_path, monkeypatch, worker_dataset):
+    import h5py
+    marker = tmp_path / "must-not-export"
+    binary = tmp_path / "karospace"
+    binary.write_text('#!/usr/bin/env python3\nfrom pathlib import Path\n'
+                      f'Path({str(marker)!r}).touch()\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv("KAROSPACE_BIN", str(binary))
+    with h5py.File(worker_dataset, "r+") as root:
+        root["obsm/spatial"][-1, -1] = float("nan")
+    async def exercise():
+        async with codex.Session() as session:
+            raw = await session._run_tool("run_export", {
+                "input_path": worker_dataset, "output": str(tmp_path / "out.html"), "flags": []})
+            result = session.boundary.filter("run_export", {}, {}, raw)
+            assert result["is_error"]
+            assert "invalid_coordinates" in json.dumps(result)
+            assert worker_dataset not in json.dumps(result)
+            assert not marker.exists()
+    asyncio.run(asyncio.wait_for(exercise(), 15))
 
 
 @pytest.mark.parametrize("command", ["build", "chat", "web", "app", "auth"])

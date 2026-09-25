@@ -691,7 +691,10 @@
     });
     const draft = await response.json();
     if (!response.ok) { addMessage("error", draft.error || "Could not prepare privacy preview."); return; }
-    if (!window.confirm("This exact text will be sent to the model provider. Check that it contains no names, patient/sample IDs, or other personal information. Cancel to edit.\n\n" + draft.text)) return;
+    const reviewNote = window.KAROSPACE_OFFLINE
+      ? "This request will be processed by the local model on this Mac. Review it before continuing.\n\n"
+      : "This exact text will be sent to the model provider. Check that it contains no names, patient/sample IDs, or other personal information. Cancel to edit.\n\n";
+    if (!window.confirm(reviewNote + draft.text)) return;
     input.value = ""; autosize();
     pipeline.reset();   // a new run starts fresh — clear the previous run's stages
     await post("/send", { draft_id: draft.draft_id });

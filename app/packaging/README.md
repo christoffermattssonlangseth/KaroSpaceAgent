@@ -1,5 +1,8 @@
 # Packaging `KaroSpace Agent.app`
 
+For the separate offline-only app, see [Offline desktop app](#offline-desktop-app).
+The existing build described below opens the cloud-provider UI.
+
 Builds the `karospace-agent app` chat interface into a signed, notarized macOS
 `.app` that opens with a normal double-click.
 
@@ -108,3 +111,77 @@ bundled companion must match too: build a universal2 `karospace-companion` (e.g.
 `lipo`-merge an Apple-Silicon and an Intel `cargo build --release`) and point
 `KAROSPACE_COMPANION_SRC` at it so the spec bundles the fat binary instead of the
 host-arch one. Single-arch (Apple Silicon) is usually enough for a lab audience.
+
+## Offline desktop app
+
+On macOS Apple Silicon, with the offline runtime and model already installed:
+
+```bash
+cd app
+python packaging/build_offline_app.py
+open "dist/KaroSpace Offline.app"
+```
+
+Double-click **KaroSpace Offline.app**, then choose **Choose dataset…** or
+**Start chat**. The chooser accepts `.h5ad`, `.rds`, `.RData`, and `.zarr` paths.
+Selecting a dataset grants access for that session; choose a different input
+by closing and reopening the app. The chat's **Stop and close** ends the session.
+
+Use **Edit → Paste** or **⌘V** in the composer. `/tools` lists registered local
+KaroSpace capabilities without relying on model-generated answers. `/inspect`
+runs schema and structure inspection on the selected `.h5ad`/`.zarr` through
+the existing privacy boundary and history; a default dataset launch offers this
+inspection for review. It does not export or modify the dataset. Custom opening
+requests still go to the model. R inputs and multi-table SpatialData may need
+additional options through the tool loop.
+
+The small default CPU model is not a reliable autonomous viewer planner: live
+checks have shown invented tool names and incorrect arguments. The registered
+export/preprocessing tools are available, but a successful greeting or `/tools`
+response does not establish that a complete model-driven export works. Check
+actual tool/history results. A larger already-downloaded 4B model failed to
+finish a tool-use check within three minutes on the current CPU setup; it is
+not enabled by default.
+
+This is a local bundle, ad-hoc signed for this Mac. It reuses the normal app's
+HTML/CSS interface, with offline labels and private pipes replacing HTTP/SSE.
+The coordinator includes a dataset chooser and fixed offline entry point. Its configuration
+pins the existing source checkout, Python runtime and local model by absolute
+path. No models, research data, credentials or scientific dependencies are
+copied into the bundle. Moving the `.app` to Applications is supported on this
+Mac; moving or deleting its runtime/model/checkout requires rebuilding. A
+portable distribution and Developer ID signing/notarization are separate work.
+
+Use `--python /path/to/python` and `--model /path/to/model` to build against
+different existing installations. The default uses `.venv-offline` and the
+locally available model, as `karospace-agent app --offline` does. The build
+requires Xcode command-line tools and never downloads dependencies or models.
+Existing `.app` destinations are not overwritten; use a new `--output` path
+when rebuilding, then replace the older app yourself.
+
+The native chooser passes only a path; it does not read dataset contents. The
+model/tool worker uses the existing verified Seatbelt sandbox. The separate UI
+helper uses App Sandbox with no network client/server entitlements, and verifies
+a denied connection before loading the page. CSP blocks connections and remote
+assets; navigation/new-window delegates prevent external browsing. The
+coordinator denies its own networking after launching its children. No localhost
+server, cloud provider or login shell is used. Normal launches discard raw logs.
+
+The UI deliberately uses WebKit's deprecated in-process WebView API: this Mac
+could not start WKWebView's auxiliary content processes in the restricted setup.
+This is a compatibility limitation requiring revalidation after macOS updates;
+it is not a supported modern-WebKit replacement for wider distribution. The
+process-scope limits in [offline isolation](../../docs/design/offline-isolation.md)
+still apply. The UI can access its app container; private browsing is enabled.
+
+Validate the built executable with a synthetic message through the real shared
+composer, checking the on-screen window, reply and both processes' restrictions:
+
+```bash
+"dist/KaroSpace Offline.app/Contents/MacOS/KaroSpaceOffline" --smoke-test
+codesign --verify --deep --strict "dist/KaroSpace Offline.app"
+```
+
+The smoke test uses the normal session location and never loads a selected
+research dataset. Scientific tools have separate synthetic worker checks.
+`karospace-agent chat --offline` remains the terminal alternative.

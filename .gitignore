@@ -26,6 +26,7 @@ viewer*.json
 __pycache__/
 *.pyc
 .venv/
+.venv-offline/
 .ipynb_checkpoints/
 .pytest_cache/
 *.egg-info/

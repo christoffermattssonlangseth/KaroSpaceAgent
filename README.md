@@ -11,29 +11,30 @@ viewer from a raw `.h5ad` / SpatialData `.zarr` file.
 karospace-agent build ~/data/my_xenium.h5ad "grid by sample, colour by cell_type"
 ```
 
+It can also **ingest a local folder of raw spatial output bundles** into the
+`.h5ad` the pipeline above expects: `ingest_spatial` walks a directory of bundles,
+auto-detecting the vendor layout per bundle — Xenium (`cell_feature_matrix.h5` +
+`cells.parquet` / `cells.csv`) and MERSCOPE / MERFISH (Vizgen's `cell_by_gene.csv`
++ `cell_metadata.csv`), and a folder mixing both is fine — assembles them with
+shared cores, and concatenates them into one file with a per-cell `sample_id`.
+`qc_filter` is a standalone step that drops low-quality cells by total counts /
+detected genes before clustering, and R objects can be **converted and checked**
+with `rds_convert` / `rds_validate` (Seurat / SingleCellExperiment via rds2h5ad).
+All of these run locally; only aggregate counts (samples, cells, genes,
+per-platform bundle counts, before/after) cross the boundary — never a bundle
+folder name (which becomes a `sample_id` value), a path, or a coordinate.
+
 It can also **start from a public GEO accession** instead of a local file:
 `geo_manifest` lists a series' samples, files, and inferred platform, and
 `geo_build` downloads only the matrix members needed to construct the AnnData
 — for a Xenium sample it range-fetches `cell_feature_matrix.h5` + `cells.parquet`
 out of the multi-GB `outs.zip` rather than the whole archive — and writes a
-minimal `.h5ad` (raw counts + spatial coordinates) ready for the pipeline above.
-Xenium, Visium, and MERSCOPE/MERFISH (Vizgen) layouts are supported; other
-platforms report what an assembler would need. Only public GEO catalogue
-metadata crosses the boundary; the download and assembly run locally.
-
-It can also **ingest a local folder of raw spatial output bundles**: `ingest_spatial`
-walks a directory of bundles, auto-detecting the vendor layout per bundle — Xenium
-(`cell_feature_matrix.h5` + `cells.parquet` / `cells.csv`) and MERSCOPE / MERFISH
-(Vizgen's `cell_by_gene.csv` + `cell_metadata.csv`), and a folder mixing both is
-fine — assembles them with the same cores the GEO builder uses (so a locally-ingested
-and a GEO-built `.h5ad` are structurally identical), and concatenates them into one
-file with a per-cell `sample_id`. `qc_filter` is a standalone step that drops
-low-quality cells by total counts / detected genes before clustering, and R objects
-can be **converted and checked** with `rds_convert` / `rds_validate` (Seurat /
-SingleCellExperiment via rds2h5ad). All of these run locally; only aggregate counts
-(samples, cells, genes, per-platform bundle counts, before/after) cross the boundary
-— never a bundle folder name (which becomes a `sample_id` value), a path, or a
-coordinate.
+minimal `.h5ad` (raw counts + spatial coordinates) using the same cores as the
+local ingest (so a GEO-built and a locally-ingested `.h5ad` are structurally
+identical), ready for the pipeline above. Xenium, Visium, and MERSCOPE/MERFISH
+(Vizgen) layouts are supported; other platforms report what an assembler would
+need. Only public GEO catalogue metadata crosses the boundary; the download and
+assembly run locally.
 
 It exists because getting from raw data to a good viewer means choosing ~30
 correct flags for a messy dataset — and *knowing which choices are right* takes
@@ -252,9 +253,9 @@ python -m pip install -e ./app
 ```
 
 The project's `.codex/config.toml` connects the `karospace` stdio MCP server,
-exposing all 21 tools from the standalone app: inspection, dataset readiness, GEO acquisition,
+exposing all 22 tools from the standalone app: inspection, dataset readiness, GEO acquisition,
 local raw-Xenium ingestion, R conversion and validation, preparation (QC
-filtering, clustering, section splitting, local split preview, notebook hand-off),
+filtering, clustering, embedding-only UMAP, section splitting, local split preview, notebook hand-off),
 enrichment, export, packaging, and validation.
 Restart Codex after setup, trust this project if prompted, and check `/mcp`
 for `karospace`. The server runs locally and makes no model calls; it needs

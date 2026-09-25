@@ -120,12 +120,13 @@ def available_memory():
     except ImportError:
         try:
             return int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
-        except (ValueError, OSError):
+        except (ValueError, OSError, AttributeError):
             return None
 
 
 def check(input_path, output_dir, section_key="", coords_key="spatial", counts_layer="",
-          require_counts=False, table=""):
+          require_counts=False, table="", *, require_spatial=True, spatial_x="", spatial_y="",
+          coordinate_mode="strict"):
     import numpy as np
     errors, warnings = [], []
     report = {"errors": errors, "warnings": warnings}
@@ -147,14 +148,40 @@ def check(input_path, output_dir, section_key="", coords_key="spatial", counts_l
                 report["raw_counts"] = counts["raw_counts"]
             if require_counts and not report["raw_counts"]:
                 errors.append("raw_counts_required")
-            coords = root.get("obsm", {}).get(coords_key)
-            if coords is None or not hasattr(coords, "shape"):
-                errors.append("spatial_coordinates_missing")
-            elif (len(coords.shape) != 2 or coords.shape[0] != matrix["cells"]
-                  or coords.shape[1] < 2 or coords.dtype.kind not in "iuf"):
-                errors.append("invalid_coordinates")
-            elif any(not np.isfinite(block).all() for block in blocks(coords)):
-                errors.append("invalid_coordinates")
+            if require_spatial:
+                # Match the local readers' established fallback order. Split
+                # and preview remain strict about their explicit obsm key.
+                embeddings = root.get("obsm", {})
+                if coordinate_mode == "export" and coords_key not in embeddings:
+                    for key in ("spatial", "X_spatial", "spatial_coords", "X_spatial_coords", "Spatial", "spatialcoords"):
+                        node = embeddings.get(key)
+                        if hasattr(node, "shape") and len(node.shape) == 2 and node.shape[1] >= 2:
+                            coords_key = key
+                            break
+                elif coordinate_mode == "companion":
+                    coords_key = next((key for key in ("spatial", "X_spatial") if key in embeddings), "spatial")
+                    if coords_key not in embeddings:
+                        for x, y in (("array_col", "array_row"), ("pxl_col_in_fullres", "pxl_row_in_fullres"), ("x", "y")):
+                            if x in root["obs"] and y in root["obs"]:
+                                spatial_x, spatial_y = x, y
+                                break
+                if spatial_x or spatial_y:
+                    coords = [root["obs"].get(key) for key in (spatial_x, spatial_y)]
+                    if any(node is None or not hasattr(node, "shape")
+                           or node.shape != (matrix["cells"],) or node.dtype.kind not in "iuf"
+                           for node in coords):
+                        errors.append("invalid_coordinates")
+                    elif any(not np.isfinite(block).all() for node in coords for block in blocks(node)):
+                        errors.append("invalid_coordinates")
+                else:
+                    coords = root.get("obsm", {}).get(coords_key)
+                    if coords is None or not hasattr(coords, "shape"):
+                        errors.append("spatial_coordinates_missing")
+                    elif (len(coords.shape) != 2 or coords.shape[0] != matrix["cells"]
+                          or coords.shape[1] < 2 or coords.dtype.kind not in "iuf"):
+                        errors.append("invalid_coordinates")
+                    elif any(not np.isfinite(block).all() for block in blocks(coords)):
+                        errors.append("invalid_coordinates")
             if section_key:
                 if "obs" not in root or section_key not in root["obs"]:
                     errors.append("section_key_missing")
@@ -165,7 +192,7 @@ def check(input_path, output_dir, section_key="", coords_key="spatial", counts_l
                         errors.append("section_labels_missing")
                     if groups > 10_000:
                         warnings.append("section_cardinality_high")
-            else:
+            elif require_spatial:
                 warnings.append("section_key_not_selected")
             report["estimated_memory_bytes"] = matrix["storage_bytes"] * 3 + matrix["cells"] * 256
             report["estimated_output_bytes"] = max(matrix["storage_bytes"] * 4, 64 * 1024**2)
@@ -206,9 +233,15 @@ def main():
     parser.add_argument("--counts-layer", default="")
     parser.add_argument("--require-counts", action="store_true")
     parser.add_argument("--table", default="")
+    parser.add_argument("--no-spatial", action="store_true")
+    parser.add_argument("--spatial-x", default="")
+    parser.add_argument("--spatial-y", default="")
+    parser.add_argument("--coordinate-mode", choices=("strict", "export", "companion"), default="strict")
     args = parser.parse_args()
     report = check(args.input, args.output_dir, args.section_key, args.coords_key,
-                   args.counts_layer, args.require_counts, args.table)
+                   args.counts_layer, args.require_counts, args.table,
+                   require_spatial=not args.no_spatial, spatial_x=args.spatial_x, spatial_y=args.spatial_y,
+                   coordinate_mode=args.coordinate_mode)
     print("READINESS_JSON " + json.dumps(report))
 
 

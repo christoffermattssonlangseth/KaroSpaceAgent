@@ -16,6 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+offline = [
+    "mlx-lm>=0.31,<0.32; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 web = [
     "starlette>=0.40",
     "uvicorn>=0.30",

@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+import pytest
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -14,6 +15,12 @@ from karospace_agent import tools
 
 
 def test_stdio_tools_sanitize_validate_and_preserve_protocol(tmp_path, caplog):
+    ad = pytest.importorskip("anndata")
+    np = pytest.importorskip("numpy")
+    data = ad.AnnData(np.ones((3, 2), dtype=np.float32))
+    data.obs["sample_id"] = ["synthetic"] * 3
+    data.obsm["spatial"] = np.zeros((3, 2))
+    data.write_h5ad(tmp_path / "synthetic.h5ad")
     # The fixture emits both inspect values and normal export progress. Neither
     # may become stray stdout on the MCP transport; inspect values must also be
     # absent from the tool result.
@@ -44,6 +51,7 @@ def test_stdio_tools_sanitize_validate_and_preserve_protocol(tmp_path, caplog):
                 "PATH": os.environ.get("PATH", ""),
                 "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "KAROSPACE_BIN": str(fake_cli),
+                "KAROSPACE_MERGE_PYTHON": sys.executable,
                 "KAROSPACE_AGENT_STREAM": "1",  # Server must override teeing.
                 "KAROSPACE_AGENT_HISTORY_DIR": str(tmp_path / "history"),
             },
@@ -55,7 +63,7 @@ def test_stdio_tools_sanitize_validate_and_preserve_protocol(tmp_path, caplog):
                 assert "schema" in initialized.instructions
                 listed = await client.list_tools()
                 assert {t.name for t in listed.tools} == set(tools.TOOL_NAMES)
-                assert len(listed.tools) == 21
+                assert len(listed.tools) == 22
                 for tool in listed.tools:
                     assert tool.model_dump(by_alias=True)["inputSchema"]["type"] == "object"
 
@@ -96,7 +104,7 @@ def test_stdio_tools_sanitize_validate_and_preserve_protocol(tmp_path, caplog):
                 unknown = await client.call_tool("not_a_tool", {})
                 assert unknown.model_dump(by_alias=True)["isError"]
                 # The same connection remains usable after error results.
-                assert len((await client.list_tools()).tools) == 21
+                assert len((await client.list_tools()).tools) == 22
 
     with caplog.at_level(logging.ERROR):
         asyncio.run(asyncio.wait_for(exercise(), timeout=30))

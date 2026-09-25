@@ -172,7 +172,7 @@ default and no auth: it is a local app with a browser window, not a service.
 | `agent.py` | Provider selection and Claude options/session; one-shot builds. |
 | `codex.py` | Codex app-server connection, conversation state, tool dispatch and interruption. |
 | `tool_worker.py` | Validates and executes one existing tool in a cancellable local worker; the parent filters reports before they reach Codex. |
-| `mcp.py` | Serves the same 21 sanitizing tools over stdio for Codex and other MCP clients; no model session or Claude authentication. |
+| `mcp.py` | Serves the same 22 sanitizing tools over stdio for Codex and other MCP clients; no model session or Claude authentication. |
 | `auth.py` | Detects which credential the CLI subprocess will use and whether it is permitted; no secret is read. |
 | `cli.py` | `karospace-agent build <input> "<intent>"`, `karospace-agent chat [input] ["<intent>"]` (the REPL), `karospace-agent web`, and `karospace-agent auth`. |
 | `web.py` | The browser front end: Starlette app, SSE event hub, one-turn-at-a-time worker (optional `[web]` extra). |
@@ -255,12 +255,94 @@ requested. Multi-table SpatialData requires an explicit table selection. Its
 response contains only fixed diagnostic codes, booleans and aggregate counts;
 no identifiers or values are returned.
 
-The playbook calls this tool before QC, clustering, companion processing and
-export. `ready=false` means resolve the reported errors first. Memory/disk
-estimates are conservative guidance, not guarantees for every algorithm; warnings
+The registered QC, clustering, UMAP, section splitting/preview, companion and
+export tools enforce a fresh check before processing, across Claude, Codex and
+stdio MCP. Errors block execution; there is no model-controlled bypass. QC
+requires raw counts in X. QC, clustering and UMAP do not require spatial
+coordinates. Spatial operations check their selected coordinate and section
+keys; export can also use numeric obs columns for coordinates. Companion requires
+`prepare` with an explicit `--output`. Run `check_readiness` separately to diagnose
+problems early (`require_spatial=false` for nonspatial operations).
+Use `coordinate_mode=export` or `companion` to match those readers' coordinate
+fallbacks. Export checks `sample_id` when no `--section-key` is supplied; choose
+an explicit section column or an empty value for a single section. Multi-table
+SpatialData and missing section columns need explicit choices at this boundary.
+
+Memory/disk estimates are advisory guidance, not guarantees for every algorithm; warnings
 need review. The tool tests output writability and reports available resources.
 It is a workflow check, not an operating-system memory limit. Raw-count validation
 does not establish provenance or prove that integer-valued data was never normalized.
+It also does not establish consent or make restricted data safe for cloud use.
+
+### Offline chat (macOS Apple Silicon)
+
+For a double-clickable **KaroSpace Offline.app**, run from `app/`:
+
+```bash
+python packaging/build_offline_app.py
+open "dist/KaroSpace Offline.app"
+```
+
+The app offers **Choose dataset…** or **Start chat** and always uses offline
+mode. This local bundle refers to the existing checkout, runtime and model;
+keep those in place. It can be moved to Applications on this Mac, but is not
+a portable installer for another machine. See the
+[offline packaging instructions](packaging/README.md#offline-desktop-app).
+
+Use an already-downloaded MLX model and a Python environment with the `offline`
+extra installed. Dependency/model acquisition happens before a restricted-data
+session. Tk is required for the native window (included with many Python builds).
+
+```bash
+pip install -e '.[offline]'
+karospace-agent app /path/to/input.h5ad --offline --local-model /path/to/local-mlx-model
+```
+
+`chat --offline` provides the terminal equivalent. `--offline-python /path/to/python`
+selects a separate runtime. In a source checkout, `.venv-offline/bin/python` is
+used if present. If `--local-model` is omitted, the app looks for an existing
+`output/offline-models/qwen2.5-0.5b-instruct-4bit` directory in the checkout,
+then a cached `mlx-community/Qwen2.5-0.5B-Instruct-4bit` snapshot, then the larger
+cached `mlx-community/Qwen3-4B-Instruct-2507-4bit`. It never downloads a model.
+The small model uses less CPU; larger models generally reason better but can
+take several minutes per turn in this CPU-only mode.
+Small models (up to roughly 600 million parameters) are expanded in memory
+to use faster CPU matrix operations. Allow about 1–2 GB for their weights,
+plus runtime/context memory. Larger models keep their quantized weights.
+
+This launches a native plain-text window with an in-process CPU model. The OS
+blocks network access for the app and its child processes, including connections
+to localhost and Unix sockets. Section previews are displayed as local PNGs.
+The process verifies its restrictions before loading the model or input. Files
+created by the session stay in a new private folder under
+`~/Library/Application Support/KaroSpaceAgent/offline/`; the terminal and window
+show its exact location. Provider credentials/proxy settings are not inherited.
+The selected input and model are read-only, and unrelated data files are blocked.
+New input access requires restarting with that input selected.
+
+CPU replies can be slow. Network-dependent acquisition/analytics are unavailable,
+and viewers are saved rather than opened automatically. **Stop and close** stops
+the session and its tools. Existing cloud modes are unchanged. This protects the
+app's process tree; it cannot control unrelated backup/sync applications or
+establish permission under a donation agreement.
+
+`karospace-agent isolation-check` tests OS-level network denial separately
+using synthetic socket operations and a child process. It loads no dataset or
+model and returns only fixed diagnostics. Failure is never treated as permission
+to run without isolation. This diagnostic alone does **not** switch the app
+offline; use `--offline` for a confined session. See the
+[offline isolation design](../docs/design/offline-isolation.md) for enforcement
+details, platform limits and the remaining work.
+
+### Adding UMAP to an analyzed dataset
+
+`add_umap` writes a new `.h5ad` with a 2D `X_umap` using an existing PCA or latent
+representation selected from `inspect_structure` (default `X_pca`). It preserves
+expression, layers, annotations, graphs, metadata and existing embeddings. An
+existing `X_umap` is kept; an existing `umap` is copied to the standard key. If
+there is no suitable representation, choose an analysis with the researcher.
+Use `run_preprocess` when clustering is intended, rather than just to add UMAP.
+The new step uses the same local history and recovery support as preprocessing.
 
 ### Recovering after an interruption
 

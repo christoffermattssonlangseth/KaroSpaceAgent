@@ -247,6 +247,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="command", required=True)
 
+    sub.add_parser("isolation-check", help="Test OS network denial using synthetic probes; does not start a model.")
+
     b = sub.add_parser("build", help="Build a viewer from a raw .h5ad / .zarr.")
     b.add_argument("input", help="Path to the .h5ad file or SpatialData .zarr store.")
     b.add_argument(
@@ -321,11 +323,34 @@ def build_parser() -> argparse.ArgumentParser:
             "--provider", choices=("claude", "codex"), default=agent.DEFAULT_PROVIDER,
             help="Model provider (default: KAROSPACE_AGENT_PROVIDER or claude).",
         )
+    for parser in (a, c):
+        parser.add_argument("--offline", action="store_true", help="Run a confined local CPU model; macOS only, no cloud fallback.")
+        parser.add_argument("--local-model", default=None, help="Already-downloaded MLX model directory (offline only).")
+        parser.add_argument("--offline-python", default=None, help="Python with the offline extra installed.")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.command == "isolation-check":
+        import json
+        from .isolation import check_network_isolation
+        report = check_network_isolation()
+        print(json.dumps(report))
+        return 0 if report["available"] else 2
+
+    if getattr(args, "offline", False):
+        from . import offline
+        try:
+            return offline.launch(surface=args.command, model=args.local_model, runtime=args.offline_python,
+                                  input_path=args.input, intent=args.intent)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"Offline mode could not start: {exc}", file=sys.stderr)
+            return 2
+    if getattr(args, "local_model", None) or getattr(args, "offline_python", None):
+        print("--local-model and --offline-python require --offline.", file=sys.stderr)
+        return 2
 
     # A Finder-launched `.app` starts with a bare PATH, so tool lookups (and the
     # SDK's own `claude` lookup) would fail even when everything is installed.

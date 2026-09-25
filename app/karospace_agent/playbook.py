@@ -59,6 +59,7 @@ Inspect  — inspect_input     sanitized obs/feature metadata for a file. ALWAYS
            cli_help          verify a flag exists before using it. Never invent flags.
 Prepare  — qc_filter        drop low-quality cells (min_counts / min_genes) from a raw matrix before enrich/export.
            run_preprocess    add a leiden clustering + 2D obsm['X_umap'] when a raw file lacks them (existing embeddings kept).
+           add_umap          add only UMAP from an existing representation, preserving the researcher's analysis.
            generate_notebook  hand off heavier prep (CellCharter spatial domains) as a notebook the researcher runs.
            merge_sections    merge per-section files that lack sample metadata.
            split_sections    split multiple tissue pieces sharing one sample_id into per-piece sections (spatial gaps).
@@ -226,15 +227,25 @@ spatial_graph_present flag). Two decisions depend on it: whether a spatial
 neighbor graph already exists (§5) and how X is normalized (§3). Still no cell
 values cross — reason from structure alone.
 
-Before QC, clustering, companion processing or export, call check_readiness with
-the planned output directory and selected section/coordinate keys. Set
-require_counts=true for raw-count QC or clustering (QC reads X, so leave
+QC, clustering, embedding, section splitting/preview, companion processing and
+export automatically run a fresh local readiness check before computation.
+Use check_readiness with the planned output directory to diagnose problems early.
+Set require_spatial=false for QC, clustering or embedding alone, and true for
+spatial operations. Select section/coordinate keys to match the intended operation;
+spatial_x/spatial_y select obs coordinate columns when export uses those flags.
+Set coordinate_mode=export or companion to match that reader's fallbacks.
+Export defaults to section_key=sample_id: select an explicit column or pass an
+empty --section-key for one section, including SpatialData lacking sample_id.
+Set require_counts=true for raw-count QC (QC reads X, so leave
 counts_layer empty for that operation). For export, select the appropriate
 counts layer only if raw-count analytics need it. Resolve ready=false errors
 before starting heavy processing and discuss resource warnings. Estimates are
 not guarantees: dense algorithms may require much more memory. Run the check
 again after changing the input or relevant settings. For unsupported inputs,
 convert/ingest them first; never infer readiness from filenames.
+Companion must use prepare with an explicit --output. There is no model override
+for readiness errors. These checks validate technical structure, not consent,
+de-identification or permission to send data to a provider.
 
 ## 1b. Prepare an un-annotated matrix — cluster it first
 If inspect_input shows NO analysis-derived annotation at all — no cell_type /
@@ -248,14 +259,13 @@ layers['normalized'], and a 2D obsm['X_umap']. Use the leiden column as
 --main-cell-annotation in §2 and point display normalization at
 layers['normalized'] in §3.
 
-The same run also fills a missing UMAP: the viewer auto-detects obsm['X_umap']
-for a non-spatial scatter, so when inspect_structure lists no embedding with a
-'umap' role hint, run_preprocess adds one (it reuses the neighbours graph it
-already builds). An embedding the input already carries — e.g. an author's UMAP
-from an .rds — is kept, never overwritten. If a file is ALREADY annotated but
-just lacks a UMAP, run_preprocess still adds obsm['X_umap'] (the leiden column it
-also writes can simply go unused); use --no-umap / compute_umap=false only to skip
-the embedding deliberately. Resolution is a
+The same clustering run fills a missing X_umap. For an ALREADY annotated file
+that only lacks UMAP, use add_umap instead: choose an existing PCA or latent
+representation from inspect_structure (default X_pca), then write a new .h5ad.
+Only X_umap is added; expression, layers, annotations, graphs and other embeddings
+are preserved. Existing X_umap is kept; an existing umap is copied to X_umap.
+If no representation exists, discuss the appropriate analysis with the researcher;
+do not silently re-cluster or normalize their analyzed data. Resolution is a
 scientific choice, not a fact: run_preprocess uses a default (1.0) and reports the
 cluster count — if the user wants finer/coarser structure, re-run at a different
 resolution rather than treating the first pass as ground truth. Skip this step

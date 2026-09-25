@@ -73,6 +73,63 @@ def test_normalized_x_can_use_separate_counts_layer(tmp_path):
     assert not module().check(src, tmp_path, require_counts=True)["ready"]
 
 
+def test_nonspatial_operations_do_not_require_coordinates(tmp_path):
+    src = tmp_path / "input.h5ad"
+    data = dataset(src)
+    del data.obsm["spatial"]
+    data.write_h5ad(src)
+    assert module().check(src, tmp_path, require_spatial=False, require_counts=True)["ready"]
+    assert not module().check(src, tmp_path)["ready"]
+
+
+@pytest.mark.parametrize("defect", ["none", "missing_pair", "nonfinite", "text"])
+def test_obs_coordinates_match_export_requirements(tmp_path, defect):
+    src = tmp_path / "input.h5ad"
+    data = dataset(src)
+    del data.obsm["spatial"]
+    data.obs["x"] = [1., 2., 3.]
+    data.obs["y"] = [2., 3., 4.]
+    if defect == "nonfinite":
+        data.obs.loc[data.obs.index[-1], "y"] = np.nan
+    elif defect == "text":
+        data.obs["y"] = ["PRIVATE"] * 3
+    data.write_h5ad(src)
+    result = module().check(src, tmp_path, spatial_x="x", spatial_y="" if defect == "missing_pair" else "y")
+    assert result["ready"] == (defect == "none")
+    assert "PRIVATE" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("mode,key", [("export", "X_spatial"), ("export", "spatial_coords"),
+                                      ("companion", "X_spatial"), ("companion", "obs")])
+def test_reader_coordinate_fallbacks_are_checked(tmp_path, mode, key):
+    src = tmp_path / "input.h5ad"
+    data = dataset(src)
+    coords = data.obsm.pop("spatial")
+    if key == "obs":
+        data.obs["array_col"], data.obs["array_row"] = coords[:, 0], coords[:, 1]
+    else:
+        data.obsm[key] = coords
+    data.write_h5ad(src)
+    assert module().check(src, tmp_path, coordinate_mode=mode)["ready"]
+    assert not module().check(src, tmp_path)["ready"]
+    if key == "obs":
+        data.obs.loc[data.obs.index[-1], "array_col"] = np.nan
+    else:
+        data.obsm[key][-1, -1] = np.nan
+    data.write_h5ad(src)
+    assert "invalid_coordinates" in module().check(src, tmp_path, coordinate_mode=mode)["errors"]
+
+
+def test_invalid_primary_coordinates_cannot_hide_behind_valid_fallback(tmp_path):
+    src = tmp_path / "input.h5ad"
+    data = dataset(src)
+    data.obsm["X_spatial"] = data.obsm["spatial"].copy()
+    data.obsm["spatial"][-1, -1] = np.inf
+    data.write_h5ad(src)
+    for mode in ("export", "companion"):
+        assert "invalid_coordinates" in module().check(src, tmp_path, coordinate_mode=mode)["errors"]
+
+
 def test_resource_estimates_warn_without_claiming_guaranteed_failure(tmp_path, monkeypatch):
     src = tmp_path / "input.h5ad"
     dataset(src)
